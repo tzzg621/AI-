@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>缔造者空间 · 小手机</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="creator-space/crystal.css">
+
+</head>
+
+<body>
+
+    <div class="phone-wrapper">
+        <div class="phone-screen">
+<!-- 模拟状态栏（显示时间日期，可隐藏） -->
+<div class="mock-status-bar" id="mockStatusBar">
+    <span class="mock-time" id="clockDisplay">12:00</span>
+    <span class="mock-date" id="dateDisplay">1月1日</span>
+</div>
+
+<!-- 顶部功能条（返回按钮 + 缔造者入口，一直显示） -->
+<div class="top-bar" id="topBar">
+    <button class="status-back-btn" id="statusBackBtn" aria-label="返回"
+        style="display:none;">←</button>
+    <div class="top-bar-spacer"></div>
+    <!-- <button class="creator-entry" id="creatorEntry" aria-label="缔造者空间">✨</button> -->
+</div>
+            <!-- ★ 金色拉绳 -->
+    <div class="golden-cord" id="goldenCord">
+        <div class="cord-knot"></div>
+        <div class="cord-body"></div>
+        <div class="cord-tassel"></div>
+    </div>
+
+            <!-- 主页面容器 -->
+            <div class="page-container" id="pageContainer">
+                <div class="page active" id="pageHome">
+                    <div class="main-content" id="homeGrid"></div>
+                </div>
+            </div>
+
+            <div class="bottom-nav" id="bottomNav"></div>
+        </div>
+
+        <!-- 缔造者空间：下拉弹出的页面 -->
+        <div class="creator-overlay" id="creatorOverlay">
+        </div>
+    </div>
+
+    <script type="module" src="apps/worldBook.js"></script>
+    <script type="module" src="apps/roleBook.js"></script>
+    <script type="module" src="apps/worldNet.js"></script>
+    <script type="module" src="apps/chat.js"></script>
+    <script type="module" src="apps/music.js"></script>
+    <script type="module" src="apps/memoryBook.js"></script>
+    <script type="module" src="apps/settings.js"></script>
+    <script type="module" src="apps/market.js"></script>
+    <script type="module" src="apps/globalMemory.js"></script>
+    <script type="module" src="apps/gallery.js"></script>
+    <script type="module" src="apps/bulletin.js"></script>
+    <script type="module" src="apps/location.js"></script>
+    <script type="module" src="apps/bookClub.js"></script>
+    <script type="module" src="store/DeskPet.js"></script>
+
+    <script type="module" src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator && location.protocol.match(/^https?:$/)) {
+            navigator.serviceWorker.register('sw.js')
+                .then(() => console.log('✅ PWA 已就绪'))
+                .catch(err => console.warn('⚠️ PWA 注册失败:', err));
+        } else {
+            console.log('ℹ️ 当前为本地文件模式，跳过 PWA 注册');
+        }
+    </script>
+
+
+</body>
+
+</html>

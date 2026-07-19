@@ -341,7 +341,7 @@ function init() {
 }
 
 // ★ 注册缔造者空间模块
-importWithRetry('./creator-space/crystal.js').then(mod => {
+importWithRetry(() => import('./creator-space/crystal.js')).then(mod => {
     if (!window.__moduleRegistry) window.__moduleRegistry = [];
     window.__moduleRegistry.push({
         id: mod.id,

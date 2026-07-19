@@ -288,7 +288,11 @@ class AITaskManager {
             }
         };
 
+        // ★ 新增：触摸模式标志
+        let isTouching = false;
+
         btn.addEventListener('mousedown', (e) => {
+            if (isTouching) return;             // ★ 触摸模式跳过鼠标事件
             onStart(e.clientX, e.clientY);
             const mMove = (ev) => onMove(ev.clientX, ev.clientY);
             const mUp = (ev) => { onEnd(ev.clientX, ev.clientY); document.removeEventListener('mousemove', mMove); document.removeEventListener('mouseup', mUp); };
@@ -298,13 +302,21 @@ class AITaskManager {
         });
 
         btn.addEventListener('touchstart', (e) => {
+            isTouching = true;                   // ★ 标记触摸模式
             const t = e.touches[0];
             onStart(t.clientX, t.clientY);
             const tMove = (ev) => { ev.preventDefault(); onMove(ev.touches[0].clientX, ev.touches[0].clientY); };
-            const tEnd = (ev) => { onEnd(ev.changedTouches[0].clientX, ev.changedTouches[0].clientY); document.removeEventListener('touchmove', tMove); document.removeEventListener('touchend', tEnd); };
+            const tEnd = (ev) => {
+                onEnd(ev.changedTouches[0].clientX, ev.changedTouches[0].clientY);
+                document.removeEventListener('touchmove', tMove);
+                document.removeEventListener('touchend', tEnd);
+                // ★ 延迟清除触摸标志，避免 mouseup 抢跑
+                setTimeout(() => { isTouching = false; }, 300);
+            };
             document.addEventListener('touchmove', tMove, { passive: false });
             document.addEventListener('touchend', tEnd);
         }, { passive: false });
+
 
         btn.addEventListener('mouseenter', () => {
             btn.style.transform = 'scale(1.08)';

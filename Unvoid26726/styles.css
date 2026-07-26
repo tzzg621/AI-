@@ -64,7 +64,7 @@ body {
     position: relative;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;    /* 顶部贴顶、底部贴底 */
+   
 }
 
 

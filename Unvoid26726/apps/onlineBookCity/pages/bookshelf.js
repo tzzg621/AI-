@@ -223,49 +223,58 @@ export async function bindEvents(container, state) {
 
 
     // 点击卡片 → 详情页
-    bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
-      let holdTimer = null;
+   bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
+  let holdTimer = null;
+  let startX = 0, startY = 0;
+  const MOVE_THRESHOLD = 10;
 
-      card.addEventListener('pointerdown', (e) => {
-        holdTimer = setTimeout(() => {
-          holdTimer = null;
-          card.dataset.longPress = 'true';
-          // ★ 长按触发 → 打开操作面板
-          const bookId = card.dataset.bookId;
-          const book = allBooks.find(b => b.id === bookId);
-          if (book) showBookActionPanel(book, card, container, state, () => {
-            renderCategories();
-            renderBooks();
-          });
-
-        }, 500);
+  card.addEventListener('pointerdown', (e) => {
+    startX = e.clientX;
+    startY = e.clientY;
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      card.dataset.longPress = 'true';
+      const bookId = card.dataset.bookId;
+      const book = allBooks.find(b => b.id === bookId);
+      if (book) showBookActionPanel(book, card, container, state, () => {
+        renderCategories();
+        renderBooks();
       });
+    }, 500);
+  });
 
-      card.addEventListener('pointermove', () => {
-        if (holdTimer) {
-          clearTimeout(holdTimer);
-          holdTimer = null;
-        }
-      });
+  card.addEventListener('pointermove', (e) => {
+    if (!holdTimer) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  });
 
-      card.addEventListener('pointerup', () => {
-        if (holdTimer) {
-          clearTimeout(holdTimer);
-          holdTimer = null;
-        }
-        setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
-      });
+  card.addEventListener('pointerup', () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
+  });
 
-      card.addEventListener('click', (e) => {
-        if (card.dataset.longPress === 'true') {
-          e.stopPropagation();
-          return;
-        }
-        if (e.target.closest('.obc-shelf-book-cat-select')) return;
-        state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
-        state.navigateTo('detail', { bookId: card.dataset.bookId });
-      });
-    });
+  card.addEventListener('pointercancel', () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    card.dataset.longPress = 'false';
+  });
+
+  card.addEventListener('click', (e) => {
+    if (card.dataset.longPress === 'true') {
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.closest('.obc-shelf-book-cat-select')) return;
+    state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
+    state.navigateTo('detail', { bookId: card.dataset.bookId });
+  });
+});
 
 
 

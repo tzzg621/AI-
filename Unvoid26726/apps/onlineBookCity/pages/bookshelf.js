@@ -222,90 +222,51 @@ export async function bindEvents(container, state) {
     }).join('');
 
 
-// 点击卡片 → 详情页
-bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
-  let pointerTimer = null;   // ★ 桌面端专用
-  let touchTimer = null;     // ★ 移动端专用
+    // 点击卡片 → 详情页
+    bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
+      let holdTimer = null;
 
-  // ★ 桌面端：pointer 事件
-  card.addEventListener('pointerdown', () => {
-    if ('ontouchstart' in window) return;  // 触摸设备跳过
-    pointerTimer = setTimeout(() => {
-      pointerTimer = null;
-      card.dataset.longPress = 'true';
-      const bookId = card.dataset.bookId;
-      const book = allBooks.find(b => b.id === bookId);
-      if (book) showBookActionPanel(book, card, container, state, () => {
-        renderCategories();
-        renderBooks();
+      card.addEventListener('pointerdown', (e) => {
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          card.dataset.longPress = 'true';
+          // ★ 长按触发 → 打开操作面板
+          const bookId = card.dataset.bookId;
+          const book = allBooks.find(b => b.id === bookId);
+          if (book) showBookActionPanel(book, card, container, state, () => {
+            renderCategories();
+            renderBooks();
+          });
+
+        }, 500);
       });
-    }, 500);
-  });
 
-  card.addEventListener('pointermove', () => {
-    if (pointerTimer) {
-      clearTimeout(pointerTimer);
-      pointerTimer = null;
-    }
-  });
-
-  card.addEventListener('pointerup', () => {
-    if (pointerTimer) {
-      clearTimeout(pointerTimer);
-      pointerTimer = null;
-    }
-    setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
-  });
-
-  // ★ 移动端：touch 事件
-  card.addEventListener('touchstart', (e) => {
-    const touch = e.touches[0];
-    const startX = touch.clientX;
-    const startY = touch.clientY;
-
-    touchTimer = setTimeout(() => {
-      touchTimer = null;
-      card.dataset.longPress = 'true';
-      const bookId = card.dataset.bookId;
-      const book = allBooks.find(b => b.id === bookId);
-      if (book) showBookActionPanel(book, card, container, state, () => {
-        renderCategories();
-        renderBooks();
+      card.addEventListener('pointermove', () => {
+        if (holdTimer) {
+          clearTimeout(holdTimer);
+          holdTimer = null;
+        }
       });
-    }, 500);
 
-    card._touchStart = { x: startX, y: startY };
-  }, { passive: true });
+      card.addEventListener('pointerup', () => {
+        if (holdTimer) {
+          clearTimeout(holdTimer);
+          holdTimer = null;
+        }
+        setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
+      });
 
-  card.addEventListener('touchmove', (e) => {
-    if (!card._touchStart) return;
-    const touch = e.touches[0];
-    const dx = Math.abs(touch.clientX - card._touchStart.x);
-    const dy = Math.abs(touch.clientY - card._touchStart.y);
-    if (dx > 10 || dy > 10) {
-      clearTimeout(touchTimer);
-      touchTimer = null;
-      card._touchStart = null;
-    }
-  }, { passive: true });
+      card.addEventListener('click', (e) => {
+        if (card.dataset.longPress === 'true') {
+          e.stopPropagation();
+          return;
+        }
+        if (e.target.closest('.obc-shelf-book-cat-select')) return;
+        state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
+        state.navigateTo('detail', { bookId: card.dataset.bookId });
+      });
+    });
 
-  card.addEventListener('touchend', () => {
-    clearTimeout(touchTimer);
-    touchTimer = null;
-    card._touchStart = null;
-  });
-
-  // ★ 点击事件（桌面和移动通用）
-  card.addEventListener('click', (e) => {
-    if (card.dataset.longPress === 'true') {
-      e.stopPropagation();
-      return;
-    }
-    if (e.target.closest('.obc-shelf-book-cat-select')) return;
-    state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
-    state.navigateTo('detail', { bookId: card.dataset.bookId });
-  });
-});
 
 
 

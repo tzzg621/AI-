@@ -222,14 +222,16 @@ export async function bindEvents(container, state) {
     }).join('');
 
 
-    // 点击卡片 → 详情页
+// 点击卡片 → 详情页
 bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
-  let holdTimer = null;
+  let pointerTimer = null;   // ★ 桌面端专用
+  let touchTimer = null;     // ★ 移动端专用
 
   // ★ 桌面端：pointer 事件
   card.addEventListener('pointerdown', () => {
-    holdTimer = setTimeout(() => {
-      holdTimer = null;
+    if ('ontouchstart' in window) return;  // 触摸设备跳过
+    pointerTimer = setTimeout(() => {
+      pointerTimer = null;
       card.dataset.longPress = 'true';
       const bookId = card.dataset.bookId;
       const book = allBooks.find(b => b.id === bookId);
@@ -241,59 +243,70 @@ bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
   });
 
   card.addEventListener('pointermove', () => {
-    if (holdTimer) {
-      clearTimeout(holdTimer);
-      holdTimer = null;
+    if (pointerTimer) {
+      clearTimeout(pointerTimer);
+      pointerTimer = null;
     }
   });
 
   card.addEventListener('pointerup', () => {
-    if (holdTimer) {
-      clearTimeout(holdTimer);
-      holdTimer = null;
+    if (pointerTimer) {
+      clearTimeout(pointerTimer);
+      pointerTimer = null;
     }
     setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
   });
 
-// ★ 移动端：长按（按住不动就触发，滑动则取消）
-card.addEventListener('touchstart', (e) => {
+  // ★ 移动端：touch 事件
+  card.addEventListener('touchstart', (e) => {
     const touch = e.touches[0];
     const startX = touch.clientX;
     const startY = touch.clientY;
 
-    holdTimer = setTimeout(() => {
-        holdTimer = null;
-        card.dataset.longPress = 'true';
-        const bookId = card.dataset.bookId;
-        const book = allBooks.find(b => b.id === bookId);
-        if (book) showBookActionPanel(book, card, container, state, () => {
-            renderCategories();
-            renderBooks();
-        });
+    touchTimer = setTimeout(() => {
+      touchTimer = null;
+      card.dataset.longPress = 'true';
+      const bookId = card.dataset.bookId;
+      const book = allBooks.find(b => b.id === bookId);
+      if (book) showBookActionPanel(book, card, container, state, () => {
+        renderCategories();
+        renderBooks();
+      });
     }, 500);
 
-    // 记录起点，供 touchmove 判断
     card._touchStart = { x: startX, y: startY };
-}, { passive: true });
+  }, { passive: true });
 
-card.addEventListener('touchmove', (e) => {
+  card.addEventListener('touchmove', (e) => {
     if (!card._touchStart) return;
     const touch = e.touches[0];
     const dx = Math.abs(touch.clientX - card._touchStart.x);
     const dy = Math.abs(touch.clientY - card._touchStart.y);
     if (dx > 10 || dy > 10) {
-        clearTimeout(holdTimer);
-        holdTimer = null;
-        card._touchStart = null;
+      clearTimeout(touchTimer);
+      touchTimer = null;
+      card._touchStart = null;
     }
-}, { passive: true });
+  }, { passive: true });
 
-card.addEventListener('touchend', () => {
-    clearTimeout(holdTimer);
-    holdTimer = null;
+  card.addEventListener('touchend', () => {
+    clearTimeout(touchTimer);
+    touchTimer = null;
     card._touchStart = null;
-});
   });
+
+  // ★ 点击事件（桌面和移动通用）
+  card.addEventListener('click', (e) => {
+    if (card.dataset.longPress === 'true') {
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.closest('.obc-shelf-book-cat-select')) return;
+    state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
+    state.navigateTo('detail', { bookId: card.dataset.bookId });
+  });
+});
+
 
 
 

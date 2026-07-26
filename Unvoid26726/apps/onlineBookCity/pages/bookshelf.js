@@ -223,57 +223,81 @@ export async function bindEvents(container, state) {
 
 
     // 点击卡片 → 详情页
-    bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
-      let holdTimer = null;
+bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
+  let holdTimer = null;
 
-      card.addEventListener('pointerdown', (e) => {
-        holdTimer = setTimeout(() => {
-          holdTimer = null;
-          card.dataset.longPress = 'true';
-          // ★ 长按触发 → 打开操作面板
-          const bookId = card.dataset.bookId;
-          const book = allBooks.find(b => b.id === bookId);
-          if (book) showBookActionPanel(book, card, container, state, () => {
-            renderCategories();
-            renderBooks();
-          });
-
-        }, 500);
-
-        // ★ 新增：阻止触摸设备的长按文字选择
-        card.addEventListener('touchstart', (e) => {
-          e.preventDefault();  // ← 阻止浏览器等待文字选取
-        }, { passive: false });
-
-        // ★ 注意：touchstart 不能设为 passive，否则 preventDefault 无效
-
+  // ★ 桌面端：pointer 事件
+  card.addEventListener('pointerdown', () => {
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      card.dataset.longPress = 'true';
+      const bookId = card.dataset.bookId;
+      const book = allBooks.find(b => b.id === bookId);
+      if (book) showBookActionPanel(book, card, container, state, () => {
+        renderCategories();
+        renderBooks();
       });
+    }, 500);
+  });
 
-      card.addEventListener('pointermove', () => {
-        if (holdTimer) {
-          clearTimeout(holdTimer);
-          holdTimer = null;
-        }
-      });
+  card.addEventListener('pointermove', () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  });
 
-      card.addEventListener('pointerup', () => {
-        if (holdTimer) {
-          clearTimeout(holdTimer);
-          holdTimer = null;
-        }
-        setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
-      });
+  card.addEventListener('pointerup', () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
+  });
 
-      card.addEventListener('click', (e) => {
-        if (card.dataset.longPress === 'true') {
-          e.stopPropagation();
-          return;
-        }
-        if (e.target.closest('.obc-shelf-book-cat-select')) return;
-        state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
-        state.navigateTo('detail', { bookId: card.dataset.bookId });
+  // ★ 移动端：touch 事件（和 pointer 分开，互不干扰）
+  card.addEventListener('touchstart', () => {
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      card.dataset.longPress = 'true';
+      const bookId = card.dataset.bookId;
+      const book = allBooks.find(b => b.id === bookId);
+      if (book) showBookActionPanel(book, card, container, state, () => {
+        renderCategories();
+        renderBooks();
       });
-    });
+    }, 500);
+  }, { passive: true });  // ← passive: true 不影响滚动
+
+  card.addEventListener('touchmove', () => {
+    // 手指滑动时取消长按
+    clearTimeout(holdTimer);
+    holdTimer = null;
+  }, { passive: true });
+
+  card.addEventListener('touchend', () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
+  });
+
+  // ★ 阻止移动端长按弹出系统菜单
+  card.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
+  // ★ 点击事件（同时适用于桌面和移动）
+  card.addEventListener('click', (e) => {
+    if (card.dataset.longPress === 'true') {
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.closest('.obc-shelf-book-cat-select')) return;
+    state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
+    state.navigateTo('detail', { bookId: card.dataset.bookId });
+  });
+});
+
 
 
 

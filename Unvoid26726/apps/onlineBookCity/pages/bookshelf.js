@@ -255,48 +255,45 @@ bookAreaEl.querySelectorAll('.obc-shelf-book-card').forEach(card => {
     setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
   });
 
-  // ★ 移动端：touch 事件（和 pointer 分开，互不干扰）
-  card.addEventListener('touchstart', () => {
+// ★ 移动端：长按（按住不动就触发，滑动则取消）
+card.addEventListener('touchstart', (e) => {
+    const touch = e.touches[0];
+    const startX = touch.clientX;
+    const startY = touch.clientY;
+
     holdTimer = setTimeout(() => {
-      holdTimer = null;
-      card.dataset.longPress = 'true';
-      const bookId = card.dataset.bookId;
-      const book = allBooks.find(b => b.id === bookId);
-      if (book) showBookActionPanel(book, card, container, state, () => {
-        renderCategories();
-        renderBooks();
-      });
+        holdTimer = null;
+        card.dataset.longPress = 'true';
+        const bookId = card.dataset.bookId;
+        const book = allBooks.find(b => b.id === bookId);
+        if (book) showBookActionPanel(book, card, container, state, () => {
+            renderCategories();
+            renderBooks();
+        });
     }, 500);
-  }, { passive: true });  // ← passive: true 不影响滚动
 
-  card.addEventListener('touchmove', () => {
-    // 手指滑动时取消长按
-    clearTimeout(holdTimer);
-    holdTimer = null;
-  }, { passive: true });
+    // 记录起点，供 touchmove 判断
+    card._touchStart = { x: startX, y: startY };
+}, { passive: true });
 
-  card.addEventListener('touchend', () => {
-    clearTimeout(holdTimer);
-    holdTimer = null;
-    setTimeout(() => { card.dataset.longPress = 'false'; }, 100);
-  });
-
-  // ★ 阻止移动端长按弹出系统菜单
-  card.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-  });
-
-  // ★ 点击事件（同时适用于桌面和移动）
-  card.addEventListener('click', (e) => {
-    if (card.dataset.longPress === 'true') {
-      e.stopPropagation();
-      return;
+card.addEventListener('touchmove', (e) => {
+    if (!card._touchStart) return;
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - card._touchStart.x);
+    const dy = Math.abs(touch.clientY - card._touchStart.y);
+    if (dx > 10 || dy > 10) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+        card._touchStart = null;
     }
-    if (e.target.closest('.obc-shelf-book-cat-select')) return;
-    state.shelfState = { activeCat, scrollTop: bookAreaEl.scrollTop };
-    state.navigateTo('detail', { bookId: card.dataset.bookId });
-  });
+}, { passive: true });
+
+card.addEventListener('touchend', () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    card._touchStart = null;
 });
+
 
 
 

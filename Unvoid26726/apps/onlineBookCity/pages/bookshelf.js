@@ -293,6 +293,7 @@ card.addEventListener('touchend', () => {
     holdTimer = null;
     card._touchStart = null;
 });
+  });
 
 
 

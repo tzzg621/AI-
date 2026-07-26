@@ -205,6 +205,7 @@
 
 /* 每本书 — 简约分割线划分 */
 .obc-shelf-book-card {
+  touch-action: none;
   user-select: none;
   cursor: pointer;
   flex-shrink: 0;

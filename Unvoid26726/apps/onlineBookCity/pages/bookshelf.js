@@ -239,6 +239,14 @@ export async function bindEvents(container, state) {
           });
 
         }, 500);
+
+        // ★ 新增：阻止触摸设备的长按文字选择
+        card.addEventListener('touchstart', (e) => {
+          e.preventDefault();  // ← 阻止浏览器等待文字选取
+        }, { passive: false });
+
+        // ★ 注意：touchstart 不能设为 passive，否则 preventDefault 无效
+
       });
 
       card.addEventListener('pointermove', () => {

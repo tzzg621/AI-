@@ -1,0 +1,88 @@
+/* bookClub.css — 书社模块专属样式 */
+
+/* ---- 按钮统一样式 ---- */
+.bk-btn {
+    padding: 10px 14px;
+    border-radius: 14px;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: opacity 0.15s, transform 0.1s;
+}
+.bk-btn:active {
+    transform: scale(0.97);
+}
+
+.bk-btn--primary {
+    background: #8e24aa;
+    color: white;
+}
+.bk-btn--secondary {
+    background: white;
+    color: #666;
+    border: 1px solid #ccc;
+}
+.bk-btn--danger {
+    background: white;
+    color: #e53935;
+    border: 1px solid #e53935;
+}
+.bk-btn--gradient {
+    background: linear-gradient(135deg, #0b93f6, #8e24aa);
+    color: white;
+}
+.bk-btn--nav {
+    background: white;
+    color: #666;
+    border: 1px solid #ddd;
+}
+.bk-btn--nav-next {
+    background: #8e24aa;
+    color: white;
+    border: none;
+}
+.bk-btn--export {
+    background: white;
+    color: #4CAF50;
+    border: 1px solid #4CAF50;
+}
+
+/* ---- 概要折叠 ---- */
+.bk-summary-toggle {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #888;
+    background: #fafafa;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 16px;
+}
+.bk-summary-toggle:hover {
+    background: #f5f5f5;
+}
+.bk-summary-toggle .arrow {
+    transition: transform 0.2s;
+    display: inline-block;
+}
+.bk-summary-toggle .arrow.open {
+    transform: rotate(90deg);
+}
+.bk-summary-body {
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #666;
+    background: #fafafa;
+    border-bottom: 1px solid #f0f0f0;
+    font-style: italic;
+    display: none;
+    margin-bottom: 16px;
+}
+.bk-summary-body.open {
+    display: block;
+}
+

@@ -43,27 +43,49 @@ body {
     color: var(--text);
 }
 
+/* ═══ wrapper：负责尺寸 ═══ */
 .phone-wrapper {
     width: 100%;
     max-width: 380px;
     min-width: 280px;
+    height: 700px;               /* ★ wrapper 负责高度 */
+    max-height: 100vh;
     background: #1c1c1c;
     border-radius: 40px;
-    padding: 12px 8px;
+    padding: 12px 8px;           /* 壳厚度（视觉部分） */
     box-shadow: var(--shadow);
     position: relative;
 }
 
+/* ═══ screen：填满 wrapper，内部模块参照它 ═══ */
 .phone-screen {
+    width: 100%;
+    height: 100%;                /* ★ 填满 wrapper（border-box 全局生效，含 padding） */
     background: var(--phone-bg);
     border-radius: 30px;
     overflow: hidden;
-    height: 700px;
-    max-height: 100vh;
-    max-height: -webkit-fill-available;
     position: relative;
     display: flex;
     flex-direction: column;
+}
+
+/* ═══ 隐藏壳：只去视觉 + padding 归零，不留边 ═══ */
+body.no-frame .phone-wrapper {
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;                  /* ★ 关键：不留边 → screen 占据 wrapper 全部尺寸 */
+}
+body.no-frame .phone-screen {
+    border-radius: 0;
+}
+
+/* ═══ PWA 全屏：wrapper 高度撑满，screen 跟随 ═══ */
+@media (display-mode: standalone) {
+    .phone-wrapper {
+        height: 100dvh;
+        max-height: none;
+    }
 }
 
 

@@ -1424,3 +1424,30 @@ html[data-theme="clean"] {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* ★ PWA 全屏：内容保持原位，顶栏贴顶、底栏贴底，背景撑满 */
+@media (display-mode: standalone) {
+    .phone-wrapper {
+        height: 100dvh;
+        display: flex;
+        flex-direction: column;
+    }
+    .phone-screen {
+        height: auto;
+        flex: 1;                 /* 撑满视口 */
+        max-height: none;
+    }
+
+    /* ★ 中间内容区不拉伸，保持内容自然高度 */
+    .page-container {
+        flex: 0 0 auto;          /* 不再 flex:1 拉伸 */
+    }
+    .home-screen {
+        flex: 0 0 auto;          /* 内部内容保持自然高度，位置不变 */
+    }
+
+    /* ★ 底部 tab 栏贴底 */
+    .bottom-nav {
+        margin-top: auto;        /* 把底栏推到屏幕最底部 */
+    }
+}

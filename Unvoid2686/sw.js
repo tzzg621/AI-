@@ -26,8 +26,16 @@ self.addEventListener('fetch', (event) => {
     // ★ file:// 协议下直接请求，不走缓存
     if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
 
+    try {
+        const url = new URL(event.request.url);
+        // ★ 只处理【同源 + GET】请求；跨域 API（生图等）和 POST 一律放行
+        if (event.request.method !== 'GET' || url.origin !== location.origin) return;
+    } catch { return; }
+
     event.respondWith(
-        fetch(event.request)
-            .catch(() => caches.match(event.request))
+        fetch(event.request).catch(() =>
+            caches.match(event.request).then(r => r || new Response('', { status: 503 }))
+        )
     );
 });
+

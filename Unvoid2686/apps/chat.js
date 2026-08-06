@@ -1286,6 +1286,29 @@ function bindChatDetailEvents(container, pairKey, otherId, memoryService, global
 
 
 }
+// ---- 健壮的 JSON 数组提取 ----
+function extractJsonArray(text) {
+    if (!text) return null;
+
+    // 1. 直接解析
+    try { const p = JSON.parse(text); if (Array.isArray(p)) return p; } catch {}
+
+    // 2. markdown 代码块
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenced) {
+        try { const p = JSON.parse(fenced[1]); if (Array.isArray(p)) return p; } catch {}
+    }
+
+    // 3. 第一个 [ 到最后一个 ]（处理嵌套数组，替代原非贪婪正则）
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    if (start !== -1 && end > start) {
+        const sliced = text.slice(start, end + 1);
+        try { const p = JSON.parse(sliced); if (Array.isArray(p)) return p; } catch {}
+    }
+
+    return null;
+}
 
 // ---- 主动提取记忆 ----
 async function extractMemoriesForActiveChar(activeId, otherId, otherName, allMessages) {
@@ -1369,11 +1392,10 @@ async function extractMemoriesForActiveChar(activeId, otherId, otherName, allMes
 
         let memories;
         try {
-            memories = JSON.parse(reply);
-        } catch {
-            const match = reply.match(/\[[\s\S]*?\]/);
-            if (match) memories = JSON.parse(match[0]);
-            else return;
+            memories = extractJsonArray(reply);
+        } catch (e) {
+            console.warn('记忆提取 JSON 解析失败，原始回复:', reply);
+            return;
         }
 
         if (!Array.isArray(memories) || memories.length === 0) return;

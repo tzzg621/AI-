@@ -79,7 +79,7 @@ ${description}
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userContent }
             ],
-            max_tokens: 4096,
+            max_tokens: 12000,
             temperature: 0.8
         })
     });

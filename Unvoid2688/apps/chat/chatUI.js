@@ -2,6 +2,7 @@
 // 独立于 chat.js，出问题不影响核心聊天功能
 
 import { esc } from '../../store/utils.js';
+import { getAvatarHtml } from '../../store/ImageCache.js';
 
 /**
  * 初始化聊天 UI 组件
@@ -256,6 +257,11 @@ function bindInputExtensions(container, context) {
             <span class="ext-icon">📖</span>
             <span class="ext-label">平行剧情</span>
         </button>
+        <button class="chat-ext-btn" data-ext="cards">
+            <span class="ext-icon">📇</span>
+            <span class="ext-label">名片</span>
+        </button>
+
 
     `;
     bottomArea.insertBefore(panel, inputArea);
@@ -314,6 +320,67 @@ function bindInputExtensions(container, context) {
             toggleBtn.style.transform = '';
             return;
         }
+
+        // ★ 表情：弹出 emoji 面板
+        if (btn.dataset.ext === 'emoji') {
+            toggleEmojiPanel(bottomArea);
+            isOpen = false;
+            panel.classList.remove('open');
+            toggleBtn.style.transform = '';
+            return;
+        }
+
+        // ★ 名片陈列列表（动态 import + AbortController，与总结/认知同款）
+        if (btn.dataset.ext === 'cards') {
+            import('../chat.js').then(({ getFriendCards, showFriendCard }) => {
+                // 防御：快速连点只保留一个弹窗
+                document.querySelector('.cards-overlay')?.remove();
+
+                const cards = getFriendCards(context.pairKey);
+                const overlay = document.createElement('div');
+                overlay.className = 'cards-overlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:400;display:flex;align-items:center;justify-content:center;';
+                overlay.innerHTML = `
+            <div style="background:white;border-radius:20px;width:300px;padding:16px;">
+                <div style="font-weight:700;font-size:16px;margin-bottom:10px;">📇 本对话名片</div>
+                <div style="max-height:320px;overflow-y:auto;">
+                    ${cards.length === 0
+                        ? '<div style="text-align:center;color:#999;padding:30px 0;font-size:13px;">本对话暂无名片</div>'
+                        : cards.map(c => `
+                            <div class="friend-card-item" data-friend-id="${esc(c.id)}" data-sender-id="${esc(c.senderId || '')}"
+                                 style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;cursor:pointer;border:1px solid #f0f0f0;margin-bottom:8px;">
+                                <div style="width:40px;height:40px;border-radius:50%;overflow:hidden;flex-shrink:0;">${getAvatarHtml(c.id)}</div>
+                                <div style="flex:1;min-width:0;">
+                                    <div style="font-size:14px;font-weight:600;">${esc(c.name)}</div>
+                                    <div style="font-size:11px;color:#999;">${new Date(c.ts).toLocaleDateString('zh-CN')} · 点击查看</div>
+                                </div>
+                                <span style="color:#0b93f6;font-size:12px;flex-shrink:0;">查看 ➤</span>
+                            </div>`).join('')}
+                </div>
+                <button id="cardsListCloseBtn" style="width:100%;margin-top:10px;padding:9px;border:none;border-radius:12px;background:#f0f0f0;color:#666;cursor:pointer;font-size:14px;">关闭</button>
+            </div>`;
+                document.body.appendChild(overlay);
+
+                // ★ AbortController 统一管理：close() = 解除全部监听 + 移除 DOM
+                const controller = new AbortController();
+                const { signal } = controller;
+                function close() { controller.abort(); overlay.remove(); }
+
+                overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); }, { signal });
+                overlay.querySelector('#cardsListCloseBtn').addEventListener('click', close, { signal });
+                overlay.querySelectorAll('.friend-card-item').forEach(el => {
+                    el.addEventListener('click', () => {
+                        close();
+                        showFriendCard(el.dataset.friendId, el.dataset.senderId || '', context.activeId);
+                    }, { signal });
+                });
+            });
+            isOpen = false;
+            panel.classList.remove('open');
+            toggleBtn.style.transform = '';
+            return;
+        }
+
 
         window.dispatchEvent(new CustomEvent('chat-extension', {
             detail: { ext: btn.dataset.ext, pairKey: context.pairKey, otherId: context.otherId }
@@ -477,4 +544,66 @@ function showWindowSummary(context) {
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) close();
     }, { signal });
+}
+
+// ============================================================
+//  4. emoji 表情面板（点击插入光标位置，微信式）
+// ============================================================
+
+const EMOJIS = ['😀', '😄', '😁', '😆', '😅', '😂', '🤣', '😊', '😇', '🙂', '😉', '😍', '🥰', '😘', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐', '😟', '🙁', '😮', '😲', '😳', '🥺', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '💩', '🤡', '👻', '💫', '👋', '🤚', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '💪', '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '🎉', '🎊', '🎁', '✨', '⭐', '🌟', '🔥', '⚡', '💧', '🌈', '☀️', '🌙', '⛄', '🌸', '🌹', '🍀', '🍺', '🍻', '🍰', '🍕', '🍔', '🍟', '☕', '🍵', '🍦', '🍩', '🍪', '🍎', '🍊', '🍋', '🍉', '🍇', '🍓', '🍑', '🍣', '🍤', '🍜', '🍚', '🎵', '🎶', '🎤', '🎧', '🎬', '🎮', '👾', '🤖', '👀', '🧠', '💬', '💭', '📱', '💻', '📷', '🎥', '📚', '📖', '✏️', '📝', '💡', '💰', '💎', '🏆', '🥇', '🥈', '🥉', '🏅', '🚀', '✈️', '🌍', '⏰', '✅', '❌', '❓', '❗', '💯', '🔔', '🏠', '🏰', '🎡', '🌊', '🌋', '🏝️', '🐶', '🐱', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🐦', '🐤', '🦄', '🐝', '🦋', '🐌', '🐢', '🐍', '🦖', '🐙', '🦑', '🐟', '🐬', '🐳', '🦈', '🐘', '🦒', '🐎', '🐑', '🦌', '🐕', '🐈', '🦃', '🦚', '🦜', '🦩', '🐇'];
+
+let emojiPanelCloseHandler = null;   // 面板外部点击关闭的监听（防累积）
+
+function toggleEmojiPanel(bottomArea) {
+    // 已打开 → 关闭
+    const existing = document.querySelector('#emojiPanel');
+    if (existing) {
+        existing.remove();
+        if (emojiPanelCloseHandler) {
+            document.removeEventListener('click', emojiPanelCloseHandler);
+            emojiPanelCloseHandler = null;
+        }
+        return;
+    }
+
+    if (getComputedStyle(bottomArea).position === 'static') bottomArea.style.position = 'relative';
+
+    const panel = document.createElement('div');
+    panel.id = 'emojiPanel';
+    panel.style.cssText = `
+        position:absolute; bottom:calc(100% + 6px); left:0; right:0;
+        background:white; border-radius:14px; box-shadow:0 -4px 20px rgba(0,0,0,0.15);
+        padding:10px; z-index:260; max-height:200px; overflow-y:auto;
+    `;
+    panel.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(8, 1fr); gap:2px;">
+            ${EMOJIS.map(emoji => `<button class="emoji-item" data-emoji="${emoji}" style="font-size:22px; background:none; border:none; cursor:pointer; padding:4px; border-radius:8px;">${emoji}</button>`).join('')}
+        </div>
+        <div style="font-size:11px; color:#999; text-align:center; padding-top:6px;">点击表情插入光标处，可连续选择</div>
+    `;
+    bottomArea.appendChild(panel);
+
+    // 点击表情 → 插入到输入框光标位置（有选中文本则替换选中区）
+    panel.addEventListener('click', (ev) => {
+        const item = ev.target.closest('.emoji-item');
+        if (!item) return;
+        const input = document.querySelector('#chatInput');
+        if (!input) return;
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? start;
+        input.value = input.value.slice(0, start) + item.dataset.emoji + input.value.slice(end);
+        const newPos = start + item.dataset.emoji.length;
+        input.focus();
+        input.setSelectionRange(newPos, newPos);
+    });
+
+    // 点击面板外关闭（延迟绑定，避免吞掉本次点击）
+    emojiPanelCloseHandler = (ev) => {
+        if (!panel.contains(ev.target)) {
+            panel.remove();
+            document.removeEventListener('click', emojiPanelCloseHandler);
+            emojiPanelCloseHandler = null;
+        }
+    };
+    setTimeout(() => document.addEventListener('click', emojiPanelCloseHandler), 0);
 }

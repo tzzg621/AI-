@@ -1,4 +1,4 @@
-import { CharacterStore, getActiveCharacterId } from '../store/CharacterStore.js';
+import { CharacterStore, getActiveCharacterId, addBidirectionalFriend } from '../store/CharacterStore.js';
 import { getCharacterId, getCharacterNameById } from './characterManager.js';
 import { buildPrompt, buildMemoryExtractPrompt } from './promptBuilder.js';
 import { callAI, callAIForMemoryExtract } from './aiService.js';
@@ -17,6 +17,185 @@ function showToast(msg, color = '#333') {
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 2500);
 }
+
+// ---- 推荐好友名片 ----
+function resolveCardNameToId(name, senderId) {
+    if (!name) return null;
+    try {
+        const store = new CharacterStore(senderId);
+        for (const fid of store.getFriendIds()) {
+            if (getCharacterNameById(fid) === name && !isArchived(fid)) return fid;
+        }
+    } catch { }
+    return null;
+}
+
+// 把一段文本拆成「文本段 / 名片段」；名片名不匹配 → 直接丢弃（剥离）
+function splitMessageText(text, senderId, pairKey) {
+    const parts = [];
+    let last = 0;
+    const re = /【名片:(.+?)】|【接受好友:(.+?)】/g;
+    let m;
+    while ((m = re.exec(text))) {
+        const before = text.slice(last, m.index);
+        if (before.trim()) parts.push({ type: 'text', text: before });
+
+        if (m[1] !== undefined) {
+            // 【名片:名字】→ 名片块
+            const id = resolveCardNameToId(m[1].trim(), senderId);
+            if (id) {
+                addFriendCard(pairKey, m[1].trim(), id, senderId);
+                parts.push({ type: 'card', id, name: m[1].trim() });
+            }
+        } else if (m[2] !== undefined) {
+            // 【接受好友:名字】→ 独立提示块（查对话名片记录，查不到剥离）
+            const card = getFriendCards(pairKey).find(c => c.name === m[2].trim());
+            if (card) parts.push({ type: 'accept', id: card.id, name: m[2].trim() });
+        }
+        last = m.index + m[0].length;
+    }
+    const after = text.slice(last);
+    if (after.trim()) parts.push({ type: 'text', text: after });
+    return parts;
+}
+
+// 独立名片卡（无气泡，白底圆角，靠发送方一侧）
+function friendCardBlockHtml(id, name, senderId) {
+    return `<div class="friend-card" data-friend-id="${esc(id)}" data-sender-id="${esc(senderId)}"
+             style="display:flex;align-items:center;gap:10px;background:white;border:1px solid #e0e0e0;
+                    border-radius:14px;padding:10px 12px;width:200px;cursor:pointer;margin:6px 0;
+                    box-shadow:0 1px 6px rgba(0,0,0,0.08);">
+        <div style="width:40px;height:40px;border-radius:50%;overflow:hidden;flex-shrink:0;">${getAvatarHtml(id)}</div>
+        <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:600;">${esc(name)}</div>
+            <div style="font-size:11px;color:#999;">个人名片 · 点击查看</div>
+        </div>
+        <span style="color:#0b93f6;font-size:12px;flex-shrink:0;">查看 ➤</span>
+    </div>`;
+}
+
+// 接受好友提示块（独立成行，绿色小条，不带气泡）
+function acceptFriendBlockHtml(name) {
+    return `<div style="display:inline-flex;align-items:center;gap:6px;background:#e8f5e9;color:#2e7d32;
+                        border:1px solid #c8e6c9;border-radius:14px;padding:8px 12px;margin:6px 0;font-size:13px;">
+        🤝 已添加 ${esc(name)} 为好友
+    </div>`;
+}
+
+// 统一渲染：文本段→气泡，名片段→独立名片块
+function renderMsgContent(text, senderId, isMe, pairKey) {
+    const sentences = (text || '').split('|').map(s => s.trim()).filter(s => s);
+    return sentences.flatMap(sentence =>
+        splitMessageText(sentence, senderId, pairKey).map(p =>
+            p.type === 'card'
+                ? friendCardBlockHtml(p.id, p.name, senderId)
+                : p.type === 'accept'
+                    ? acceptFriendBlockHtml(p.name)
+                    : `<div class="msg-bubble ${isMe ? 'me' : 'other'}">${esc(p.text)}</div>`
+        )
+    ).join('');
+}
+
+// ---- 对话级名片记录：名字+id 只存在该角色对的对话里 ----
+const CARDS_KEY = 'chat_friend_cards';
+
+export function getFriendCards(pairKey) {
+    try { return JSON.parse(localStorage.getItem(CARDS_KEY) || '{}')[pairKey] || []; }
+    catch { return []; }
+}
+
+// 登记（按 id 去重：重复推荐只更新时间/名字，不新增）
+function addFriendCard(pairKey, name, id, senderId) {
+    try {
+        const all = JSON.parse(localStorage.getItem(CARDS_KEY) || '{}');
+        const list = all[pairKey] || [];
+        const idx = list.findIndex(c => c.id === id);
+        const entry = { name, id, senderId, ts: Date.now() };
+        if (idx !== -1) list[idx] = entry; else list.unshift(entry);
+        all[pairKey] = list;
+        localStorage.setItem(CARDS_KEY, JSON.stringify(all));
+    } catch { }
+}
+
+// 处理【接受好友:名字】：从当前对话的名片记录按名字查 id，执行加好友
+function processFriendRequest(text, otherId, pairKey) {
+    const otherName = getCharacterNameById(otherId) || otherId;
+    return text.replace(/【接受好友:(.+?)】/g, (whole, name) => {
+        const card = getFriendCards(pairKey).find(c => c.name === name.trim());
+        if (card && !isArchived(card.id)) {
+            const already = new CharacterStore(otherId).isFriend(card.id);
+            if (!already) {
+                addBidirectionalFriend(otherId, card.id);
+                showToast(`🤝 ${otherName} 已添加 ${name.trim()} 为好友`, '#2e7d32');
+            } else {
+                showToast(`ℹ️ ${otherName} 与 ${name.trim()} 已是好友`, '#999');
+            }
+            return `🤝 已添加 ${name.trim()} 为好友`;
+        }
+        return '';
+    });
+}
+
+
+// 名片详情弹窗：点击名片弹出，弹窗内点击才真正添加好友
+export function showFriendCard(friendId, senderId, activeId) {
+    let info = { name: friendId, desc: '' };
+    try {
+        const f = JSON.parse(localStorage.getItem('rolebook_characters') || '[]').find(c => c.id === friendId);
+        if (f?.base) info = { name: f.base.name || friendId, desc: f.base.desc || '' };
+    } catch { }
+    if (!info.name || info.name === friendId) {
+        try {
+            const f = JSON.parse(localStorage.getItem('worldnet_extra_characters') || '[]').find(c => c.id === friendId);
+            if (f?.base) info = { name: f.base.name || friendId, desc: f.base.desc || '' };
+        } catch { }
+    }
+    try { if (new CharacterStore(friendId).getInfo().name) info.name = new CharacterStore(friendId).getInfo().name; } catch { }
+
+    let relationText = '';
+    try {
+        const rel = new CharacterStore(senderId).getRelationById(friendId);
+        if (rel?.relation) relationText = `推荐人说：${rel.relation}`;
+    } catch { }
+
+    const isAlreadyFriend = new CharacterStore(activeId).isFriend(friendId);
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:400;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+        <div style="background:white;border-radius:20px;width:280px;padding:20px;text-align:center;">
+            <div style="width:64px;height:64px;border-radius:50%;overflow:hidden;margin:0 auto 8px;">
+                ${getAvatarHtml(friendId, '?')}
+            </div>
+            <div style="font-size:18px;font-weight:700;">${esc(info.name)}</div>
+            ${info.desc ? `<div style="font-size:13px;color:#666;margin-top:6px;">${esc(info.desc)}</div>` : ''}
+            ${relationText ? `<div style="font-size:12px;color:#7c4dff;margin-top:8px;">${esc(relationText)}</div>` : ''}
+            <div style="display:flex;gap:8px;margin-top:16px;">
+                <button id="friendCardAddBtn" style="flex:1;padding:10px;border:none;border-radius:12px;cursor:pointer;font-size:14px;
+                    ${isAlreadyFriend ? 'background:#f0f0f0;color:#999;cursor:not-allowed;' : 'background:#0b93f6;color:white;'}">
+                    ${isAlreadyFriend ? '✅ 已是好友' : '➕ 添加为联系人'}
+                </button>
+                <button id="friendCardCloseBtn" style="flex:1;padding:10px;border:1px solid #ccc;background:white;color:#666;border-radius:12px;cursor:pointer;font-size:14px;">关闭</button>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#friendCardCloseBtn').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    if (!isAlreadyFriend) {
+        overlay.querySelector('#friendCardAddBtn').addEventListener('click', () => {
+            addBidirectionalFriend(activeId, friendId);
+            const btn = overlay.querySelector('#friendCardAddBtn');
+            btn.textContent = '✅ 已是好友';
+            btn.style.background = '#f0f0f0';
+            btn.style.color = '#999';
+            btn.disabled = true;
+            showToast(`✅ 已添加 ${info.name} 为联系人`, '#2e7d32');
+        });
+    }
+}
+
 
 // ---- 记忆保存（可替换） ----
 function saveMemoryToBoth(senderId, receiverId, senderName, receiverName, text) {
@@ -387,7 +566,7 @@ function renderDiscoverPage() {
                     <button class="discover-action">小程序</button>
                     <button class="discover-action">扫一扫</button>
                     <button class="discover-action">摇一摇</button>
-                    <button class="discover-action">游戏</button>
+                    <button class="discover-action" id="gameEntryBtn">游戏</button>
                 </div>
             </div>
         </div>
@@ -502,10 +681,7 @@ function renderChatDetail(pairKey, otherId, globalState) {
             <div class="chat-messages" id="chatMessages">
 ${messages.map((msg, msgIndex) => {
         const isMe = msg.senderId === activeId;
-        const sentences = (msg.text || '').split('|').map(s => s.trim()).filter(s => s);
-        const bubbleHtml = sentences.length > 1
-            ? sentences.map(t => `<div class="msg-bubble ${isMe ? 'me' : 'other'}">${esc(t)}</div>`).join('')
-            : `<div class="msg-bubble ${isMe ? 'me' : 'other'}">${esc(msg.text)}</div>`;
+        const bubbleHtml = renderMsgContent(msg.text, msg.senderId, isMe, pairKey);
         const delBtn = chatEditMode
             ? `<button class="msg-delete-btn" data-msg-index="${msgIndex}" style="
             position:absolute; top:6px; ${isMe ? 'left:6px' : 'right:6px'}; z-index:5;
@@ -779,6 +955,12 @@ function bindPageInteractions(container, memoryService, globalState) {
         container.querySelector('#momentsEntryBtn')?.addEventListener('click', () => {
             import('./chat/moments.js').then(m => m.showMomentsViewer(globalState));
         });
+
+        // ★ 发现页：游戏入口
+        container.querySelector('#gameEntryBtn')?.addEventListener('click', () => {
+            import('./games/gameCenter.js').then(m => m.openGameCenter(globalState));
+        });
+
     }
 }
 
@@ -885,6 +1067,12 @@ function bindChatDetailEvents(container, pairKey, otherId, memoryService, global
     const chatInput = container.querySelector('#chatInput');
     const chatSendBtn = container.querySelector('#chatSendBtn');
     const chatMessages = container.querySelector('#chatMessages');
+    // ★ 名片卡片点击 → 弹出名片详情
+    chatMessages?.addEventListener('click', (e) => {
+        const card = e.target.closest('.friend-card');
+        if (!card) return;
+        showFriendCard(card.dataset.friendId, card.dataset.senderId, activeId);
+    });
     const contact = getContactInfo(otherId);
 
     const activeChar = globalState?.activeCharacter;
@@ -905,7 +1093,7 @@ function bindChatDetailEvents(container, pairKey, otherId, memoryService, global
         userMsg.innerHTML = `
     <div class="msg-row me">
         <div style="min-width:0;">
-            <div class="msg-bubble me">${esc(text)}</div>
+            ${renderMsgContent(text, activeId, true, pairKey)}
         </div>
         <div class="msg-avatar">${getAvatarHtml(activeId)}</div>
     </div>
@@ -1159,6 +1347,17 @@ function bindChatDetailEvents(container, pairKey, otherId, memoryService, global
                     si++;
                     chatMessages.scrollTop = chatMessages.scrollHeight;
                     setTimeout(showNextSentence, 500);
+                } else {
+                    // ★ 流式结束：把含【名片:】的气泡替换成「文本气泡 + 独立名片块」
+                    msgContentDiv.querySelectorAll('.msg-bubble').forEach(b => {
+                        const t = b.textContent;
+                        if (t.includes('【名片:') || t.includes('【接受好友:')) {
+                            if (t.includes('【接受好友:')) processFriendRequest(t, otherId, pairKey);   // 只取副作用（执行加好友）
+                            b.outerHTML = renderMsgContent(t, otherId, false, pairKey);                  // 统一渲染成名片块/提示块
+                        }
+                    });
+
+
                 }
             }
             showNextSentence();

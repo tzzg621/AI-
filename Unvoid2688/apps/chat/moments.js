@@ -6,6 +6,7 @@ import { esc } from '../../store/utils.js';
 import { showPrompt, showConfirm } from '../../store/dialog.js';
 import { generateMomentForCharacter, fixMomentText, generateMomentInteractionsBatch, generateMomentReply } from './momentsAI.js';
 import { isArchived } from '../roleData.js';
+import { getAvatarHtml } from '../../store/ImageCache.js';
 
 
 
@@ -345,9 +346,10 @@ function renderMoment(m, activeId) {
     return `
     <div class="moments-item" style="background:white;border-radius:14px;padding:12px;margin-bottom:10px;">
         <div style="display:flex;${isMe ? 'flex-direction:row-reverse;' : ''}align-items:flex-start;gap:10px;">
-            <div style="width:38px;height:38px;border-radius:50%;background:#e0e0e0;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">
-                ${esc((authorName || '?').charAt(0))}
-            </div>
+            <div style="width:38px;height:38px;border-radius:50%;overflow:hidden;flex-shrink:0;">
+    ${getAvatarHtml(m.authorId, esc((authorName || '?').charAt(0)))}
+</div>
+
             <div style="flex:1;min-width:0;${isMe ? 'text-align:right;' : ''}">
                 <div style="font-size:14px;font-weight:600;">${esc(authorName)}</div>
                 <div style="font-size:14px;line-height:1.6;margin-top:4px;white-space:pre-wrap;">${esc(m.text)}</div>

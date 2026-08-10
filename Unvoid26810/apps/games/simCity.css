@@ -1,0 +1,223 @@
+/* apps/games/simCity.css — 模拟小城美化 */
+
+.simcity-root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(160deg, #e8f4fd 0%, #f5f0ff 100%);
+}
+
+/* ---- 顶部栏 ---- */
+.simcity-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 1px 8px rgba(0, 0, 0, 0.08);
+    flex-shrink: 0;
+}
+.simcity-header .back-btn {
+    border: none; background: none; font-size: 18px; color: #666; cursor: pointer; padding: 4px 6px;
+}
+.simcity-header .title { font-weight: 700; font-size: 16px; color: #333; }
+.simcity-header .level { font-size: 13px; color: #7c4dff; font-weight: 600; }
+
+/* ---- 滚动内容区 ---- */
+.simcity-body { flex: 1; overflow-y: auto; padding: 14px; }
+
+/* ---- 角色卡（HUD 顶部）---- */
+.simcity-char {
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 16px; padding: 14px; margin-bottom: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+.simcity-char .avatar { width: 52px; height: 52px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
+.simcity-char .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.simcity-char .cname { font-weight: 600; font-size: 15px; color: #333; }
+.simcity-char .cjob { font-size: 12px; color: #999; margin-top: 2px; }
+
+/* ---- 属性条 ---- */
+.simcity-stats {
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 16px; padding: 12px 14px; margin-bottom: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+    display: flex; justify-content: space-between;
+}
+.simcity-stat { text-align: center; flex: 1; }
+.simcity-stat .v { font-weight: 700; font-size: 16px; color: #333; }
+.simcity-stat .k { font-size: 11px; color: #999; margin-top: 2px; }
+
+
+/* ---- 小城地图（左右滑动分页）---- */
+.simcity-map {
+    position: relative;
+    border-radius: 18px;
+    margin-bottom: 12px;
+    background:
+        radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.7), transparent 60%),
+        linear-gradient(135deg, #cdeffd 0%, #e4dcff 100%);
+    box-shadow: inset 0 0 30px rgba(255, 255, 255, 0.5), 0 2px 10px rgba(0, 0, 0, 0.06);
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+}
+.simcity-map::-webkit-scrollbar { display: none; }
+.simcity-pages { display: flex; flex: 1; }
+.simcity-page {
+    position: relative;
+    flex: 0 0 100%;
+    scroll-snap-align: start;
+    padding: 14px;
+    box-sizing: border-box;
+    min-width: 0;                                          /* 允许页收缩 */
+}
+.simcity-page::before {
+    content: ''; position: absolute; inset: 0;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.55) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.55) 1px, transparent 1px);
+    background-size: 26px 26px;
+    pointer-events: none;
+}
+.simcity-grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));      /* 允许列收缩 */
+    gap: 10px;
+}
+
+.simcity-plot {
+    background: rgba(255, 255, 255, 0.93);
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    border-radius: 14px;
+    padding: 12px 6px;
+    text-align: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.simcity-plot:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(124, 77, 255, 0.18); }
+.simcity-plot:active { transform: scale(0.94); }
+.simcity-plot img {
+    width: 44px; height: 44px; border-radius: 10px;
+    object-fit: cover; margin: 0 auto 6px; display: block;
+}
+.simcity-plot .icon { font-size: 34px; line-height: 44px; }
+.simcity-plot .name { font-size: 13px; font-weight: 600; color: #333; }
+.simcity-plot .desc { font-size: 10px; color: #999; margin-top: 2px; }
+
+/* ---- 底部操作 ---- */
+.simcity-actions { display: flex; gap: 10px; }
+.simcity-btn {
+    flex: 1;
+    border: none;
+    border-radius: 14px;
+    padding: 13px 0;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.95);
+    color: #333;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    transition: transform 0.15s;
+}
+.simcity-btn:active { transform: scale(0.96); }
+.simcity-btn.primary { background: linear-gradient(135deg, #7c4dff, #9c6bff); color: #fff; }
+
+/* ---- 弹窗卡片 ---- */
+.simcity-pop {
+    position: absolute; inset: 0; z-index: 5;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex; align-items: center; justify-content: center;
+}
+.simcity-pop-card {
+    background: white; border-radius: 18px; width: 300px;
+    padding: 16px; max-height: 80%; display: flex; flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+.simcity-pop-list { flex: 1; overflow-y: auto; }
+.simcity-pop-close {
+    width: 100%; margin-top: 10px; padding: 9px;
+    border: none; border-radius: 12px; background: #f0f0f0;
+    color: #666; cursor: pointer; font-size: 13px;
+}
+
+
+/* ---- 房间 / 地点内部 ---- */
+.simcity-room {
+    background:
+        radial-gradient(circle at 50% 100%, rgba(0, 0, 0, 0.06), transparent 70%),
+        linear-gradient(#fdf6e3, #f5e6c8);
+    border-radius: 18px;
+    padding: 20px 14px;
+    box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.08);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    min-height: 220px;
+}
+.simcity-item {
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 14px;
+    padding: 20px 8px;
+    text-align: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    transition: transform 0.15s;
+}
+.simcity-item:active { transform: scale(0.95); }
+.simcity-item img { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; margin: 0 auto 6px; display: block; }
+.simcity-item .item-icon { font-size: 44px; line-height: 56px; }
+.simcity-item .item-name { font-size: 14px; font-weight: 600; color: #333; }
+.simcity-item .item-desc { font-size: 11px; color: #999; margin-top: 4px; }
+
+
+/* ---- 回忆册卡片 ---- */
+.story-empty { font-size:12px; color:#999; padding:8px 0; }
+.story-card {
+    position: relative; padding:12px 14px; margin-bottom:10px;
+    background: linear-gradient(135deg, #fdf6ec, #fef9ef);
+    border-radius:14px; cursor:pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.story-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,0.1); }
+.story-card:active { transform: scale(0.97); }
+.story-summary { font-size:14px; font-weight:600; color:#4e342e; line-height:1.5; padding-right:24px; }
+.story-meta { font-size:11px; color:#bcaaa4; margin-top:6px; }
+.story-del {
+    position:absolute; top:8px; right:8px;
+    border:none; background:none; color:#d7ccc8; cursor:pointer; font-size:14px;
+}
+.story-del:hover { color:#c62828; }
+
+/* ---- 回忆详情弹窗 ---- */
+.story-detail-card {
+    background:white; border-radius:18px; width:300px; padding:20px;
+    max-height:80%; display:flex; flex-direction:column;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+}
+.story-detail-title { font-size:16px; font-weight:700; color:#4e342e; margin-bottom:10px; }
+.story-detail-text { flex:1; overflow-y:auto; font-size:13px; line-height:1.8; color:#5d4037; white-space:pre-wrap; }
+.story-detail-meta { font-size:11px; color:#bcaaa4; margin-top:10px; }
+.story-detail-close {
+    width:100%; margin-top:10px; padding:9px;
+    border:none; border-radius:12px; background:#f5f0eb; color:#8d6e63; cursor:pointer; font-size:13px;
+}
+
+/* ---- 地点环境卡（装饰性，非行动）---- */
+.simcity-env {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, rgba(255,255,255,0.78), rgba(255,255,255,0.45));
+    border-radius: 14px;
+    padding: 18px 14px;
+    text-align: center;
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.05);
+}
+.simcity-env .env-icon { font-size: 40px; line-height: 52px; }
+.simcity-env .env-name { font-size: 14px; font-weight: 700; color: #5d4037; margin-top: 4px; }
+.simcity-env .env-desc { font-size: 11px; color: #a1887f; margin-top: 4px; }

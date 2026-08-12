@@ -598,17 +598,20 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
             act: String(s.act || ''),
             desc: String(s.desc || '')
         }));
-        estate.jobs = (Array.isArray(verdict.jobs) ? verdict.jobs : []).slice(0, 3).map((j, i) => ({
-            key: 'est_job_' + estate.id + '_' + i,
-            name: String(j.name || '职业' + (i + 1)),
-            desc: String(j.desc || ''),
-            requireSkills: Array.isArray(j.requireSkills) ? j.requireSkills : [],
-            placeKey: estate.id,
-            subKey: String(j.sub || ''),
-            base: Math.round(20 + estate.maxProgress / 200),
-            hourly: Math.round(5 + estate.maxProgress / 500),
-            quota: Math.max(1, parseInt(j.quota, 10) || 2)   // ★ AI 判断岗位上限，缺省2，下限1
-        }));
+        estate.jobs = (Array.isArray(verdict.jobs) ? verdict.jobs : []).slice(0, 3).map((j, i) => {
+            const subMatch = j.sub ? (estate.subs || []).find(s => s.name === String(j.sub)) : null;   // ★ 子地点名 → key
+            return {
+                key: 'est_job_' + estate.id + '_' + i,
+                name: String(j.name || '职业' + (i + 1)),
+                desc: String(j.desc || ''),
+                requireSkills: Array.isArray(j.requireSkills) ? j.requireSkills : [],
+                placeKey: estate.id,
+                subKey: subMatch ? subMatch.key : '',   // ★ 存子地点 key（est_sub_xxx_0），与 jobsAt/getJob 对齐
+                base: Math.round(20 + estate.maxProgress / 200),
+                hourly: Math.round(5 + estate.maxProgress / 500),
+                quota: Math.max(1, parseInt(j.quota, 10) || 2)
+            };
+        });
         await saveEstates();
 
         // ★ 释放建设行程（完成）

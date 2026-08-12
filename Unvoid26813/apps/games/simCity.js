@@ -293,15 +293,15 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
     const dynamicEstates = builtEstates.filter(e => hasIp ? canSeeEstate(roleId, profile, e) : fandomOn);    // 纯名清单（供 schedule 兜底过滤）
     // 纯名清单（供 schedule 兜底过滤）
     const visiblePlaceNames = [
-        ...PLACES.filter(p => !p.parent).map(p => p.name),                                  // 主地点
-        ...PLACES.filter(p => p.parent).map(p => p.name),                                   // 子地点
-        ...dynamicEstates.map(e => e.name),                                                  // ★ 可见动态地产
-        ...dynamicEstates.flatMap(e => (e.subs || []).map(s => `${e.name}-${s.name}`))       // ★ 动态子地点
+        ...PLACES.filter(p => !p.parent).map(p => p.name),
+        ...PLACES.filter(p => p.parent).map(p => p.name),
+        ...(fandomOn ? dynamicEstates.map(e => e.name) : []),
+        ...(fandomOn ? dynamicEstates.flatMap(e => (e.subs || []).map(s => s.name)) : [])   // ★ s.name 已是全名
     ];
     // 提示词里的地点（带场景信息，供 AI 匹配）
     const placePrompt = visiblePlaceNames.join('、')
-        + (dynamicEstates.length
-            ? '\n【建成场景】' + dynamicEstates.map(e => `${e.name}：${(e.ip || []).join('/') || '日常'} · ${(e.tags || []).join('·') || '通用'}${(e.subs || []).length ? '｜子地点：' + e.subs.map(s => `${e.name}-${s.name}（${s.desc || ''}）`).join('、') : ''}`).join('；')
+        + (fandomOn && dynamicEstates.length
+            ? '\n【建成场景】' + dynamicEstates.map(e => `${e.name}：${(e.ip || []).join('/') || '日常'} · ${(e.tags || []).join('·') || '通用'}${(e.subs || []).length ? '｜子地点：' + e.subs.map(s => `${s.name}（${s.desc || ''}）`).join('、') : ''}`).join('；')
             : '');
     // ★ 可入职职位（只给组合名，不带薪资——避免 AI 抄括号导致格式错误）
     const visibleJobs = [
@@ -569,7 +569,7 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
                 '1) name：最终场景名正常情况下为目标名。' +
                 '2) tags：场景标签数组（世界观、特色，如["fate","圣杯战争"]）。' +
                 '3) desc：一段独立的环境描述语（氛围、风貌，60字内）。' +
-                '4) subs：相关子地点数组，每个含 name、icon（emoji，可选）、act（可做什么）、desc（简述），2~4个。' +
+                '4) subs：相关子地点数组，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么）、desc（简述），2~4个。' +
                 '5) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（该职业最大在职人数，按职业稀缺度/场景规模判断，1~6）、sub（可选，关联上面 subs 里的子地点名，缺省为地产本体），如{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"}。' +
                 '6) comment：一段给共建者的评语（庆祝建成，60字内）。' +
                 '只输出JSON：{"name":"...","tags":[...],"desc":"...","subs":[{"name":"...","act":"...","desc":"..."}],"jobs":[{"name":"...","desc":"...","requireSkills":[...]}],"comment":"..."}，不要任何其他文字。';
@@ -593,8 +593,8 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
         estate.desc = String(verdict.desc || '');
         estate.subs = (Array.isArray(verdict.subs) ? verdict.subs : []).map((s, i) => ({
             key: 'est_sub_' + estate.id + '_' + i,
-            name: String(s.name || '子地点' + (i + 1)),
-            icon: String(s.icon || '🏛️'),           // ★ 补 icon（AI 可选生成，缺省 🏛️）
+            name: `${estate.goal}-${String(s.name || '子地点' + (i + 1))}`,   // ★ 全名："冬木市-柳洞寺"
+            icon: String(s.icon || '🏛️'),
             act: String(s.act || ''),
             desc: String(s.desc || '')
         }));
@@ -741,7 +741,7 @@ function jobWorkNames(jobDef) {
     if (p) names.push(p.name);
     if (jobDef.subKey) {
         const s = findPlace(jobDef.subKey);
-        if (s) names.push(s.name);
+        if (s) names.push(s.name);   // ★ 静态=纯名"教学楼"，动态=全名"冬木市-柳洞寺"，直接 push，不拼不拆
     }
     return names;
 }
@@ -1275,10 +1275,6 @@ function renderPlace(container, globalState, onBack, roleId, profile, placeKey) 
 // 子地点页面：独立地点（有自己在场），返回按钮回上级地点
 function renderSubPlace(container, globalState, onBack, roleId, profile, sub) {
     const parentPlace = findPlace(sub.parent);
-    // ★ 动态子地点：在场区/索引用"主-子"格式（与 AI schedule 的 place 一致，如"冬木市-柳洞寺"）
-    const isDynSub = !!sub.parent && !PLACES.some(p => p.key === sub.parent)
-        && (simCityEstates?.estates || []).some(e => e.id === sub.parent);
-    const subPlaceName = isDynSub ? `${parentPlace.name}-${sub.name}` : sub.name;
 
     const jobsHere = jobsAt(parentPlace.key, sub.key);
     const careerJob = careerWorkHere(profile, parentPlace.key, sub.key);
@@ -1289,21 +1285,21 @@ function renderSubPlace(container, globalState, onBack, roleId, profile, sub) {
         <div class="simcity-root">
             <div class="simcity-header">
                 <button class="back-btn" id="subBack">←</button>
-                <span class="title">${sub.icon} ${esc(sub.name)}</span>
+                <span class="title">${sub.icon} ${esc(subDisplayName(sub.name))}</span>
                 <span class="level">${esc(parentPlace.name)}</span>
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(sub.key) ? ' sc-outdoor' : ''}">
                     <div class="simcity-env">
                         <div class="env-icon">${sub.icon}</div>
-                        <div class="env-name">${esc(sub.name)}</div>
+                        <div class="env-name">${esc(subDisplayName(sub.name))}</div>
                         <div class="env-desc">${placeAmbience(sub, hour)}</div>
                     </div>
                 </div>
 
                 ${jobsCollapseHtml(jobsHere, profile)}
                 ${open
-            ? presentSectionHtml(subPlaceName, roleId)
+            ? presentSectionHtml(sub.name, roleId)
             : `<div style="font-size:12px;color:#999;text-align:center;padding:10px;">🌙 已打烊，${esc(sub.name)}要等${OPEN_HOURS[sub.key][0]}:00 开门</div>`}
                 <div style="font-size:12px;color:#999;text-align:center;margin-top:10px;">更多互动布置中…</div>
             </div>
@@ -1318,7 +1314,7 @@ function renderSubPlace(container, globalState, onBack, roleId, profile, sub) {
     const careerBtn = container.querySelector('#careerActBtn');
     if (careerBtn) {
         careerBtn.addEventListener('click', () => {
-            if (!open) { toast(`🌙 ${sub.name}还没开门`, '#ff9800'); return; }
+            if (!open) { toast(`🌙 ${subDisplayName(sub.name)}还没开门`, '#ff9800'); return; }
             doCareerWork(container, globalState, onBack, roleId, profile, careerJob, () => renderSubPlace(container, globalState, onBack, roleId, profile, sub));
         });
     }
@@ -1937,7 +1933,7 @@ function renderEstate(container, globalState, onBack, roleId, profile, estate) {
                 </div>
                 <div class="sc-present">
                     <div class="sc-present-hd">🏛️ 子地点</div>
-                    ${(estate.subs || []).map(s => `<div class="sc-prop">${esc(s.name)} <small>${esc(s.desc || '')}</small></div>`).join('') || '<div class="sc-empty">暂无</div>'}
+                        ${(estate.subs || []).map(s => `<div class="sc-prop">${esc(subDisplayName(s.name))} <small>${esc(s.desc || '')}</small></div>`).join('') || '<div class="sc-empty">暂无</div>'}
                 </div>
                 <div class="sc-present">
                     <div class="sc-present-hd">💼 职业</div>
@@ -2649,6 +2645,12 @@ function canSeeEstate(roleId, profile, estate) {
     return false;
 }
 
+// ★ 子地点显示名：全名（"冬木市-柳洞寺"）→ 纯名（"柳洞寺"）显示
+function subDisplayName(name) {
+    const s = String(name || '');
+    return s.includes('-') ? s.split('-').pop() : s;
+}
+
 // ★ 动态地点：静态 PLACES 找不到时，查建成地产（转成 place 结构，与主地点同构）
 function getPlace(placeKey) {
     const p = PLACES.find(x => x.key === placeKey);
@@ -2672,43 +2674,31 @@ function getPlace(placeKey) {
     return null;
 }
 
-// ★ 动态职业：JOB_DEFS 找不到时，查建成地产的职业；并支持"地点-子地点-职位"组合名解析
+// ★ 动态职业：JOB_DEFS 找不到时，查建成地产的职业；支持"地点-子地点-职位"组合名解析（歧义时返回 null）
 function getJob(jobKey) {
     if (typeof jobKey === 'string') {
         jobKey = jobKey.replace(/（[^）]*）$/g, '').trim();   // ★ 剥离尾部"（时薪32）"等说明
     }
-    if (JOB_DEFS[jobKey]) return JOB_DEFS[jobKey];
-    // ★ 静态职业按名字/中文组合匹配（"学校-教师"、"学校-教学楼-教师"）
+    if (JOB_DEFS[jobKey]) return JOB_DEFS[jobKey];   // 精确 key 直接命中（无歧义）
+    const hits = [];   // ★ 组合/名字匹配收集（歧义保护：>1 返回 null）
+    // 静态：纯名 / 中文组合（"教师"、"学校-教师"、"学校-教学楼-教师"）
     for (const [k, j] of Object.entries(JOB_DEFS)) {
-        if (j.name === jobKey) return j;
-        const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name || j.placeKey;      // school → 学校
-        const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';   // teach → 教学楼
-        if (`${pn}-${j.name}` === jobKey) return j;
-        if (sn && `${pn}-${sn}-${j.name}` === jobKey) return j;
+        const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name || j.placeKey;
+        const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
+        if (j.name === jobKey || `${pn}-${j.name}` === jobKey || (sn && `${pn}-${sn}-${j.name}` === jobKey)) hits.push(j);
     }
     const ests = (simCityEstates?.estates || []).filter(e => e.status === 'built');
     for (const e of ests) {
         const j = (e.jobs || []).find(x => x.key === jobKey);
-        if (j) return j;
+        if (j) return j;   // key 精确命中（est_job_xxx_0）唯一，直接返回
     }
-    // ★ 动态职业：组合/名字解析
-    if (typeof jobKey === 'string') {
-        const byName = [];
-        for (const e of ests) {
-            for (const j of (e.jobs || [])) {
-                const subName = (e.subs || []).find(s => s.key === j.subKey)?.name || '';
-                const combos = new Set([
-                    `${e.name}-${j.name}`,
-                    subName ? `${e.name}-${subName}-${j.name}` : '',
-                    j.name
-                ]);
-                if (combos.has(jobKey)) return j;
-                if (j.name === jobKey) byName.push(j);
-            }
+    for (const e of ests) {
+        for (const j of (e.jobs || [])) {
+            const subName = (e.subs || []).find(s => s.key === j.subKey)?.name || '';   // ★ 全名"冬木市-柳洞寺"
+            if (jobKey === j.name || jobKey === `${subName}-${j.name}` || (e.name && jobKey === `${e.name}-${j.name}`)) hits.push(j);
         }
-        if (byName.length === 1) return byName[0];   // ★ 全库唯一职位名
     }
-    return null;
+    return hits.length === 1 ? hits[0] : null;   // ★ 歧义（>1）或找不到（0）→ null
 }
 
 // 某地点的所有职位（静态 JOB_DEFS + 动态建成地产职业）

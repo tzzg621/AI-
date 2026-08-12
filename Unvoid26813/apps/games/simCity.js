@@ -311,7 +311,7 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
             const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
             return `${sn ? `${pn}-${sn}-` : `${pn}-`}${j.name}`;
         }),
-        ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${(e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey}-` : `${e.name}-`}${j.name}`))
+                ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${subDisplayName((e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey)}-` : `${e.name}-`}${j.name}`))
     ];
 
     const { callAIWithMessages } = await import('../aiService.js');
@@ -325,7 +325,7 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
             '6) ip：角色所属作品/世界观标签（JSON字符串数组，如["fate"]；普通角色留空或["日常"]），用于同世界观角色聚拢与特别场景可见性。' +
             '★ 地点只能从【小城地点】中选择（未列出的地点在小城不存在）：【小城地点】' + placePrompt + '\n' +
             '★ 职位只能从【小城职位】中选择（可修正注册自称职业）：【小城职位】' + visibleJobs.join('；') + '\n' +
-            '★ job 字段必须填【小城职位】里的组合名（如"学校-教师"、"冬木市-圣杯战争观察员"、"冬木市-柳洞寺-巡逻员"），禁止填职业名以外的内容。' +
+            '★ job 必须填【小城职位】里的完整组合名（必须含地点前缀，如"夜之城-学校-教师"、"冬木市-圣杯战争观察员"），禁止省略地点或只填职业名。' +
             '根据角色设定选最合适的（注册时的自称职业仅供参考，可修正为更合适的职位；学生可选"学校-学生"）。' +
             '★ 职业要多样化：避免扎堆学生/教师/文员等基础职业，尽量结合角色设定选有特色的职位；若角色与某建成场景（见【建成场景】）世界观相关，优先选该场景的新职业。' +
             '营业时间（未列出的地点全天开放，商业街/娱乐街全天可安排夜市夜宵）：商场10:00~22:00、奶茶店9:00~23:00、餐厅10:00~22:00、游戏厅10:00~24:00、KTV19:00~凌晨02:00、酒吧19:00~凌晨02:00、教学楼8:00~21:00、操场6:00~22:00、学校6:00~22:00；不要安排角色在打烊时间去。' +
@@ -570,9 +570,9 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
                 '2) tags：场景标签数组（世界观、特色，如["fate","圣杯战争"]）。' +
                 '3) desc：一段独立的环境描述语（氛围、风貌，60字内）。' +
                 '4) subs：相关子地点数组，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么）、desc（简述），2~4个。' +
-                '5) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（该职业最大在职人数，按职业稀缺度/场景规模判断，1~6）、sub（可选，关联上面 subs 里的子地点名，缺省为地产本体），如{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"}。' +
+                '5) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
                 '6) comment：一段给共建者的评语（庆祝建成，60字内）。' +
-                '只输出JSON：{"name":"...","tags":[...],"desc":"...","subs":[{"name":"...","act":"...","desc":"..."}],"jobs":[{"name":"...","desc":"...","requireSkills":[...]}],"comment":"..."}，不要任何其他文字。';
+                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"..."},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
             const userContent =
                 `地产目标：${estate.goal}\n` +
                 `规模：${estate.maxProgress} 点（数值越大规模越大）\n` +
@@ -599,14 +599,14 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
             desc: String(s.desc || '')
         }));
         estate.jobs = (Array.isArray(verdict.jobs) ? verdict.jobs : []).slice(0, 3).map((j, i) => {
-            const subMatch = j.sub ? (estate.subs || []).find(s => s.name === String(j.sub)) : null;   // ★ 子地点名 → key
+            const subMatch = j.sub ? (estate.subs || []).find(s => subDisplayName(s.name) === String(j.sub)) : null;   // ★ 全名拆纯名匹配（"冬木市-柳洞寺" → "柳洞寺"）
             return {
                 key: 'est_job_' + estate.id + '_' + i,
                 name: String(j.name || '职业' + (i + 1)),
                 desc: String(j.desc || ''),
                 requireSkills: Array.isArray(j.requireSkills) ? j.requireSkills : [],
                 placeKey: estate.id,
-                subKey: subMatch ? subMatch.key : '',   // ★ 存子地点 key（est_sub_xxx_0），与 jobsAt/getJob 对齐
+                subKey: subMatch ? subMatch.key : '',
                 base: Math.round(20 + estate.maxProgress / 200),
                 hourly: Math.round(5 + estate.maxProgress / 500),
                 quota: Math.max(1, parseInt(j.quota, 10) || 2)

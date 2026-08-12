@@ -720,16 +720,17 @@ const REDEEM_CODES = {
 // 职业表：单一数据源（地点-详细地点-职位 命名，便于同种类不同地点扩展）
 // 消费方：AI评估 / 场景应聘 / 每日结算 / 市政厅登记表——只改这张表全系统联动
 const JOB_DEFS = {
-    'hall-hall-clerk': { name: '市政厅·文员', placeKey: 'hall', subKey: '', base: 40, hourly: 22, quota: 3, hallStaff: true },
-    'mall-mallshop-owner': { name: '商业街·商场·店主', placeKey: 'mall', subKey: 'mallshop', base: 0, hourly: 45, quota: 2, hallStaff: false },
-    'mall-restaurant-chef': { name: '商业街·餐厅·厨师', placeKey: 'mall', subKey: 'restaurant', base: 0, hourly: 38, quota: 2, hallStaff: false },
-    'mall-milktea-barista': { name: '商业街·奶茶店·奶茶师', placeKey: 'mall', subKey: 'milktea', base: 0, hourly: 25, quota: 2, hallStaff: false },
-    'entertain-ktv-singer': { name: '娱乐街·KTV·驻唱', placeKey: 'entertain', subKey: 'ktv', base: 0, hourly: 30, quota: 2, hallStaff: false },
-    'school-teach-teacher': { name: '学校·教学楼·教师', placeKey: 'school', subKey: 'teach', base: 30, hourly: 32, quota: 5, hallStaff: false },
-    'school-student': { name: '学校·学生', placeKey: 'school', subKey: '', base: 0, hourly: 0, quota: 999, hallStaff: false },
-    'clinic-clinic-doctor': { name: '诊所·医生', placeKey: 'clinic', subKey: '', base: 50, hourly: 40, quota: 2, hallStaff: false },
-    'clinic-clinic-nurse': { name: '诊所·护士', placeKey: 'clinic', subKey: '', base: 20, hourly: 28, quota: 3, hallStaff: false },
+    'hall-hall-clerk': { name: '文员', placeKey: 'hall', subKey: '', base: 40, hourly: 22, quota: 3, hallStaff: true },
+    'mall-mallshop-owner': { name: '店主', placeKey: 'mall', subKey: 'mallshop', base: 0, hourly: 45, quota: 2, hallStaff: false },
+    'mall-restaurant-chef': { name: '厨师', placeKey: 'mall', subKey: 'restaurant', base: 0, hourly: 38, quota: 2, hallStaff: false },
+    'mall-milktea-barista': { name: '奶茶师', placeKey: 'mall', subKey: 'milktea', base: 0, hourly: 25, quota: 2, hallStaff: false },
+    'entertain-ktv-singer': { name: '驻唱', placeKey: 'entertain', subKey: 'ktv', base: 0, hourly: 30, quota: 2, hallStaff: false },
+    'school-teach-teacher': { name: '教师', placeKey: 'school', subKey: 'teach', base: 30, hourly: 32, quota: 5, hallStaff: false },
+    'school-student': { name: '学生', placeKey: 'school', subKey: '', base: 0, hourly: 0, quota: 999, hallStaff: false },
+    'clinic-clinic-doctor': { name: '医生', placeKey: 'clinic', subKey: '', base: 50, hourly: 40, quota: 2, hallStaff: false },
+    'clinic-clinic-nurse': { name: '护士', placeKey: 'clinic', subKey: '', base: 20, hourly: 28, quota: 3, hallStaff: false },
 };
+
 
 // 职位上班地点名列表（工时统计用）：绑了详细地点就用它，否则用地点名
 function jobWorkNames(jobDef) {

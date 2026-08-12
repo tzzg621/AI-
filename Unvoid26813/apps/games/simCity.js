@@ -303,15 +303,15 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
         + (dynamicEstates.length
             ? '\n【建成场景】' + dynamicEstates.map(e => `${e.name}：${(e.ip || []).join('/') || '日常'} · ${(e.tags || []).join('·') || '通用'}${(e.subs || []).length ? '｜子地点：' + e.subs.map(s => `${e.name}-${s.name}（${s.desc || ''}）`).join('、') : ''}`).join('；')
             : '');
-    // ★ 可入职职位（显示直观组合：静态"中文地点-职业名"；动态"地产-子地点-职位名"）
+    // ★ 可入职职位（只给组合名，不带薪资——避免 AI 抄括号导致格式错误）
     const visibleJobs = [
         ...Object.keys(JOB_DEFS).map(k => {
             const j = JOB_DEFS[k];
             const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name || j.placeKey;
             const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
-            return `${sn ? `${pn}-${sn}-` : `${pn}-`}${j.name}（时薪${j.hourly}）`;
+            return `${sn ? `${pn}-${sn}-` : `${pn}-`}${j.name}`;
         }),
-        ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${(e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey}-` : `${e.name}-`}${j.name}（时薪${j.hourly}）`))
+        ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${(e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey}-` : `${e.name}-`}${j.name}`))
     ];
 
     const { callAIWithMessages } = await import('../aiService.js');
@@ -730,7 +730,6 @@ const JOB_DEFS = {
     'clinic-clinic-doctor': { name: '医生', placeKey: 'clinic', subKey: '', base: 50, hourly: 40, quota: 2, hallStaff: false },
     'clinic-clinic-nurse': { name: '护士', placeKey: 'clinic', subKey: '', base: 20, hourly: 28, quota: 3, hallStaff: false },
 };
-
 
 // 职位上班地点名列表（工时统计用）：绑了详细地点就用它，否则用地点名
 function jobWorkNames(jobDef) {
@@ -2639,8 +2638,8 @@ async function saveEstates() { return saveSimCityEstates(simCityEstates); }
 function canSeeEstate(roleId, profile, estate) {
     if (estate.owner === roleId || (estate.contributors || []).includes(roleId)) return true;
     if (estate.status !== 'built') return false;
-    const myIp = profile.ip || [];
-    if ((estate.ip || []).some(t => myIp.includes(t))) return true;
+    const myIp = (profile.ip || []).map(x => String(x).toLowerCase());
+    if ((estate.ip || []).some(t => myIp.includes(String(t).toLowerCase()))) return true;
     const sched = new Set((profile.schedule || []).map(s => s.place));
     if (sched.has(estate.name)) return true;
     if ((estate.subs || []).some(s => sched.has(s.name))) return true;
@@ -2672,6 +2671,9 @@ function getPlace(placeKey) {
 
 // ★ 动态职业：JOB_DEFS 找不到时，查建成地产的职业；并支持"地点-子地点-职位"组合名解析
 function getJob(jobKey) {
+    if (typeof jobKey === 'string') {
+        jobKey = jobKey.replace(/（[^）]*）$/g, '').trim();   // ★ 剥离尾部"（时薪32）"等说明
+    }
     if (JOB_DEFS[jobKey]) return JOB_DEFS[jobKey];
     // ★ 静态职业按名字/中文组合匹配（"学校-教师"、"学校-教学楼-教师"）
     for (const [k, j] of Object.entries(JOB_DEFS)) {

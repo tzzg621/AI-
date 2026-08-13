@@ -79,6 +79,22 @@ function findTargetByAuthor(moment, name) {
     return null;
 }
 
+// ★ 解析 AI 输出的 friendId → 真实角色 id（AI 可能输出名字；解析不出返回 null，丢弃该互动）
+function resolveRoleId(raw) {
+    if (!raw) return null;
+    // 已是合法 id：能查到名字（返回 ≠ id 本身）→ 直接用
+    if (getCharacterNameById(raw) !== raw) return raw;
+    // 是名字 → 名册 / 网络反查 id
+    try {
+        const list = JSON.parse(localStorage.getItem('rolebook_characters') || '[]');
+        const f = list.find(c => c.base?.name === raw || c.id === raw);
+        if (f) return f.id;
+        const list2 = JSON.parse(localStorage.getItem('worldnet_extra_characters') || '[]');
+        const f2 = list2.find(c => c.base?.name === raw || c.id === raw);
+        if (f2) return f2.id;
+    } catch { }
+    return null;
+}
 
 function renderList(overlay, globalState) {
     const activeId = getActiveCharacterId(globalState);
@@ -158,17 +174,17 @@ function renderList(overlay, globalState) {
                 if (!m) continue;
                 const store = new CharacterStore(m.authorId);
                 for (const it of list) {
-                    if (!it.friendId) continue;
-                    if (it.like) store.likeMoment(m.id, it.friendId);           // ★ 恢复点赞
-                    if (it.comment) {                                            // ★ 恢复评论
+                    const fid = resolveRoleId(it.friendId);   // ★ 名字 → 真实 id
+                    if (!fid) continue;                        // 解析不出 → 丢弃，不存脏数据
+                    if (it.like) store.likeMoment(m.id, fid);
+                    if (it.comment) {
                         store.commentMoment(m.id, {
-                            authorId: it.friendId,
-                            authorName: getCharacterNameById(it.friendId),
+                            authorId: fid,                              // ★ 存真实 id（身份识别）
+                            authorName: getCharacterNameById(fid),      // ★ 名字由 id 派生
                             text: it.comment
                         });
                     }
                 }
-
                 // ★ 标记已互动（防重复）
                 const updated = (store.getMoments() || []).find(x => x.id === m.id);
                 if (updated) {
@@ -242,23 +258,20 @@ function renderList(overlay, globalState) {
                 const list = await generateMomentReply(authorId, moment);
                 if (!list.length) { toast('ℹ️ 暂无好友可互动', '#999'); return; }
                 for (const it of list) {
-                    if (!it.friendId) continue;
+                    const fid = resolveRoleId(it.friendId);   // ★ 名字 → 真实 id
+                    if (!fid) continue;
                     if (it.action === 'reply' && it.targetName) {
-                        const targetId = findTargetByAuthor(moment, it.targetName);   // ★ 名字 → id
+                        const targetId = findTargetByAuthor(moment, it.targetName);
                         if (!targetId) continue;
                         store.replyComment(momentId, targetId, {
-                            authorId: it.friendId,
-                            authorName: getCharacterNameById(it.friendId),
+                            authorId: fid,
+                            authorName: getCharacterNameById(fid),
                             replyToId: targetId,
                             replyToName: it.targetName,
                             text: it.text
                         });
                     } else if (it.text) {
-                        store.commentMoment(momentId, {
-                            authorId: it.friendId,
-                            authorName: getCharacterNameById(it.friendId),
-                            text: it.text
-                        });
+                        store.commentMoment(momentId, { authorId: fid, authorName: getCharacterNameById(fid), text: it.text });
                     }
                 }
                 // ★ 标记已互动（防重复）
@@ -318,14 +331,15 @@ function renderList(overlay, globalState) {
 function renderMoment(m, activeId) {
     const isMe = m.authorId === activeId;
     const authorName = isMe ? '我' : getCharacterNameById(m.authorId);
+    const myName = getCharacterNameById(activeId) || '';   // ★ 当前主视角名字（兜底判断用）
     const likes = (m.likes || []).map(id => getCharacterNameById(id)).join('、');
     const comments = (m.comments || []).map(c => {
-        const cName = c.authorId === activeId ? '我' : c.authorName;
+        const cName = (c.authorId === activeId || c.authorName === myName) ? '我' : c.authorName;
         const replies = (c.replies || []).map(r =>
             `<div style="margin-left:12px;margin-top:2px;font-size:13px;line-height:1.5;">
-        <span style="font-weight:600;">${esc(r.authorId === activeId ? '我' : r.authorName)}</span>
+        <span style="font-weight:600;">${esc((r.authorId === activeId || r.authorName === myName) ? '我' : r.authorName)}</span>
         <span style="color:#999;">回复</span>
-        <span style="font-weight:600;">${esc(r.replyToId === activeId ? '我' : r.replyToName)}：</span>
+        <span style="font-weight:600;">${esc((r.replyToId === activeId || r.replyToName === myName) ? '我' : r.replyToName)}：</span>
         ${esc(r.text)}
         <button data-reply data-author-id="${esc(m.authorId)}" data-moment-id="${esc(m.id)}"
                 data-target-id="${esc(r.id)}" data-target-name="${esc(r.authorName)}"

@@ -1,3 +1,4 @@
+// apps/chat.js — 聊天模块
 import { CharacterStore, getActiveCharacterId, addBidirectionalFriend } from '../store/CharacterStore.js';
 import { getCharacterId, getCharacterNameById } from './characterManager.js';
 import { buildPrompt, buildMemoryExtractPrompt } from './promptBuilder.js';
@@ -393,6 +394,61 @@ function getContactInfo(id) {
     // ★ 找不到时用 getCharacterNameById 兜底（会查归档表的名字快照）
     return all.find(c => c.id === id) || { name: getCharacterNameById(id), avatar: '?' };
 }
+
+/**
+ * ★ 通用对外接口：向角色对注入一条消息，可选触发对方 AI 回复（真实聊天逻辑）
+ * 供任何外部模块（模拟小城等）从外部引入聊天使用
+ * @param {string} activeId  - 发起方角色 id
+ * @param {string} otherId   - 对方角色 id
+ * @param {object} message   - { senderId, senderDisplayName, text }
+ * @param {object} [options]
+ * @param {boolean} [options.reply=false] - 是否触发对方 AI 回复
+ * @param {string} [options.replyHint=''] - 追加到 systemPrompt 的提示（模块自定义）
+ * @returns {Promise<{ reply: string|null }>}
+ */
+export async function injectChatMessage(activeId, otherId, message, options = {}) {
+    const pairKey = getPairKey(activeId, otherId);
+    const messages = getOrCreateMessages(pairKey);
+    const activeName = message.senderDisplayName || getCharacterNameById(activeId) || activeId;
+    const otherName = getCharacterNameById(otherId) || otherId;
+
+    // ① 注入消息入真实聊天历史（内存 + 落库，打开即见）
+    messages.push({ senderId: message.senderId || activeId, senderDisplayName: activeName, text: message.text });
+    saveChatMessages(chatMessagesMap);
+
+    if (!options.reply) return { reply: null };
+
+    // ② 对方角色数据（rolebook → worldnet → CharacterStore）
+    let characterData = null;
+    try {
+        characterData = JSON.parse(localStorage.getItem('rolebook_characters') || '[]').find(c => c.id === otherId) || null;
+        if (!characterData) characterData = JSON.parse(localStorage.getItem('worldnet_extra_characters') || '[]').find(c => c.id === otherId) || null;
+        if (!characterData) { const info = new CharacterStore(otherId).getInfo(); if (info) characterData = { base: info }; }
+    } catch (e) { }
+
+    // ③ 真实 prompt（含记忆/关系）+ 模块自定义提示
+    const { systemPrompt, assistantContext } = buildPrompt({
+        character: characterData, characterId: otherId, messages: messages.slice(-50),
+        aiRoleName: otherName, targetId: activeId, targetName: activeName,
+        autoMemory: localStorage.getItem('auto_memory_' + otherId) === 'true'
+    });
+
+    let reply = '';
+    try {
+        const aiResult = await callAI({
+            systemPrompt: systemPrompt + (options.replyHint ? '\n\n' + options.replyHint : ''),
+            assistantContext, maxTokens: options.maxTokens || 4096
+        });
+        reply = (aiResult?.content || aiResult || '').trim();
+    } catch (e) { reply = `⚠️ ${e.message}`; }
+    const displayReply = reply.replace(/【(记忆|修改记忆|删除记忆)】.+?(?=\n|$)/g, '').trim();
+
+    // ④ 回复入同一角色对历史
+    messages.push({ senderId: otherId, senderDisplayName: otherName, text: displayReply });
+    saveChatMessages(chatMessagesMap);
+    return { reply: displayReply };
+}
+
 // ---- 渲染函数 ----
 
 function renderChatsPage(globalState) {
@@ -565,7 +621,7 @@ function renderDiscoverPage() {
                 <div class="discover-grid">
                     <button class="discover-action">小程序</button>
                     <button class="discover-action">扫一扫</button>
-                    <button class="discover-action">摇一摇</button>
+                    <button class="discover-action" id="shakeEntryBtn">摇一摇</button>
                     <button class="discover-action" id="gameEntryBtn">游戏</button>
                 </div>
             </div>
@@ -959,6 +1015,13 @@ function bindPageInteractions(container, memoryService, globalState) {
         // ★ 发现页：游戏入口
         container.querySelector('#gameEntryBtn')?.addEventListener('click', () => {
             import('./games/gameCenter.js').then(m => m.openGameCenter(globalState));
+        });
+
+        // ★ 发现页：摇一摇（匿名匹配聊天）
+        container.querySelector('#shakeEntryBtn')?.addEventListener('click', () => {
+            const overlay = document.createElement('div');
+            (document.querySelector('.phone-screen') || document.body).appendChild(overlay);
+            import('./chat/shakeMatch.js').then(m => m.start(overlay, globalState, () => overlay.remove()));
         });
 
     }

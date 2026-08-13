@@ -24,6 +24,8 @@ let propertyAreaIndex = {};    // ★ 区域→房产索引（"附近房产"可�
 let charDisplayMap = {};       // ★ id→公开显示索引（只存游戏名+职业；私密数据不进入，完整档案走 getProfile）
 // ★ 地产目标评估任务表（内存）：防重复 + 锁定 + 占位显示目标
 let pendingTargets = [];   // [{ estateId, goal, submittedAt }]
+// ★ 当前活跃聊天窗口的"自动重开"能力（开新窗口覆盖；仅 AI 完成且重开过时使用）
+let activeChatRefresh = null;
 
 // ---- 权限清单（系统接口声明：以后加授权项只改这里）----
 const PERMISSIONS = [
@@ -97,6 +99,34 @@ function settleFrom(profiles, mainRoleId, writes) {
     return mainGain;
 }
 
+// ★ 地产建设进度结算（纯内存）：建设中的地产，共建者在"所在地=地产名"的每个小时 +20 进度
+//   所在地从 24h 索引（placeIndex）直查——该地产名下的索引项里该小时在列即在场（O(1)，不遍历全部地点）
+//   索引由 schedule/builds/appointments 推导，离线任意小时可算；补算上限72h；进度满即停（焕新手动）
+function settleEstateProgressFrom(estates, placeIndex, now = Date.now()) {
+    let changed = false;
+    for (const e of estates) {
+        if (e.status !== 'building' || !e.maxProgress || !e.name) continue;
+        const builders = e.contributors || [];
+        if (!builders.length) continue;
+        const hoursAt = placeIndex[e.name] || {};          // ★ 只查该地产的索引项
+        const last = e.lastProgress || (e.createdAt || now);
+        const hours = Math.min(72, Math.floor((now - last) / 3600000));
+        if (hours <= 0) continue;
+        changed = true;                      // ★ 只要结算了就推进基准并保存（无论进度是否变化）
+        for (let i = 0; i < hours && e.progress < e.maxProgress; i++) {
+            const present = hoursAt[new Date(last + i * 3600000).getHours()] || [];
+            for (const pid of builders) {
+                if (present.includes(pid)) {
+                    e.progress = Math.min(e.maxProgress, (e.progress || 0) + 20);
+                    changed = true;
+                    if (e.progress >= e.maxProgress) break;
+                }
+            }
+        }
+        e.lastProgress = now;
+    }
+    return changed;
+}
 
 // ============================================================
 //  入口
@@ -129,6 +159,8 @@ export async function start(container, globalState, onBack) {
 
     await ensureSimCityWorld();   // ★ 确保当天天气/见闻（跨天自动刷新）
     await loadEstates();
+    // ★ 地产建设进度结算（纯内存）：所在地=地产名的共建者每小时 +20
+    if (settleEstateProgressFrom(simCityEstates.estates || [], placeIndex)) await saveEstates();
     await cleanupStaleTempChats();
     const back = () => { simCityCtx = null; onBack && onBack(); };
     const profile = await getProfile(roleId);
@@ -311,7 +343,7 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
             const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
             return `${sn ? `${pn}-${sn}-` : `${pn}-`}${j.name}`;
         }),
-                ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${subDisplayName((e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey)}-` : `${e.name}-`}${j.name}`))
+        ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${subDisplayName((e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey)}-` : `${e.name}-`}${j.name}`))
     ];
 
     const { callAIWithMessages } = await import('../aiService.js');
@@ -352,9 +384,10 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
 
     // ★ 职业写入：目标职位存在且未满 → 覆盖 jobKey（旧职位实时释放）；否则保留现职业
     if (data.job && getJob(data.job)) {
+        const jd = getJob(data.job);                    // ★ 解析出标准定义（含标准 key）
         const counts = await getJobCounts();
-        if ((counts[data.job] || 0) < getJob(data.job).quota) {
-            profile.jobKey = data.job;
+        if ((counts[jd.key] || 0) < jd.quota) {         // ★ 用 jd.key 统计（不再用 AI 原始字符串）
+            profile.jobKey = jd.key;                    // ★ 存标准 key（如 hall-hall-clerk）
             charDisplayMap[roleId] = { name: profile.name || '', jobKey: profile.jobKey || '', energy: profile.energy || 100 };
         } else {
             toast('🔁 目标职位已满，保留当前职业', '#999');
@@ -492,6 +525,86 @@ function addEstateSched(roleId, profile, estate) {
     return true;
 }
 
+// ★ 分享快照名片（视觉后置，先取数据）
+function buildShareCard(roleId, profile) {
+    return {
+        shareId: 'share_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 6),
+        name: profile.name || '神秘居民',
+        job: jobDisplay(profile) || '自由职业',
+        level: profile.level || 1,
+        money: profile.money || 0,
+        traits: (profile.aiProfile?.traits || []).join('、') || '未知',
+        ip: (profile.ip || []).join('、'),
+        props: (profile.properties || []).length
+    };
+}
+
+// ★ 好友自动注册（与主视角注册同结构、全默认；AI 自动填后续优化）
+function createDefaultProfile(name) {
+    return {
+        name, job: '自由职业', enhanceFandom: false,
+        money: 1000, energy: 100, mood: 100, level: 1,
+        permissions: PERMISSIONS.map(p => p.key), gameFriends: [],
+        lastPayDay: dayStr(new Date(Date.now() - 86400000)), createdAt: Date.now()
+    };
+}
+
+// ★ 分享到真实聊天：业务逻辑在 simCity；chat.js 只出通用接口 injectChatMessage
+async function sendGameShareToChat(activeId, otherId, shareText) {
+    const activeName = getCharacterNameById(activeId) || activeId;
+    let res;
+    try {
+        const { injectChatMessage } = await import('../chat.js');   // ★ 路径：apps/chat.js
+        res = await injectChatMessage(activeId, otherId, {
+            senderId: activeId,
+            senderDisplayName: activeName,
+            text: shareText
+        }, {
+            reply: true,
+            replyHint: '【系统】对方正在向你分享一款叫「虚拟小城」的角色扮演游戏。如果你对这个游戏感兴趣、愿意入住，请在回复末尾加上【同意注册】虚拟小城；如果不感兴趣就正常回复，不要加任何标记。请保持你的角色人设与说话风格。'
+        });
+    } catch (e) {
+        res = await sendGameShareLocal(activeId, otherId, shareText, activeName);   // 降级（保险）
+    }
+    return { reply: res.reply || '', agreed: /【同意注册】\s*虚拟小城/.test(res.reply || '') };
+}
+
+// ★ 降级版：chat.js 加载失败时的本地简化回复（存储直写 + 简化AI）
+async function sendGameShareLocal(activeId, otherId, shareText, activeName) {
+    const pairKey = [activeId, otherId].sort().join('||');
+    const map = JSON.parse(localStorage.getItem('chat_messages') || '{}');
+    const messages = map[pairKey] || (map[pairKey] = []);
+    const otherName = getCharacterNameById(otherId) || otherId;
+
+    messages.push({ senderId: activeId, senderDisplayName: activeName, text: shareText });
+    localStorage.setItem('chat_messages', JSON.stringify(map));
+
+    let charBase = null;
+    try {
+        charBase = JSON.parse(localStorage.getItem('rolebook_characters') || '[]').find(c => c.id === otherId) || null;
+        if (!charBase) charBase = JSON.parse(localStorage.getItem('worldnet_extra_characters') || '[]').find(c => c.id === otherId) || null;
+        if (!charBase) { const info = new CharacterStore(otherId).getInfo(); if (info) charBase = { base: info }; }
+    } catch (e) { }
+
+    const { callAIWithMessages } = await import('../aiService.js');
+    const history = messages.slice(-40).map(m => `${m.senderDisplayName || m.senderId}：${m.text}`).join('\n');
+    const baseInfo = charBase ? JSON.stringify(charBase.base || charBase).slice(0, 800) : '';
+    const systemPrompt =
+        `你是${otherName}，请完全以这个角色的人设说话，用第一人称，不要跳出角色。` +
+        (baseInfo ? `\n角色信息：${baseInfo}\n` : '') +
+        '\n对方正在向你分享一款叫「虚拟小城」的角色扮演游戏。如果你对这个游戏感兴趣、愿意入住，请在回复末尾加上【同意注册】虚拟小城；如果不感兴趣就正常回复，不要加任何标记。保持你的说话风格与角色人设。';
+    let raw = '';
+    try {
+        const r = await callAIWithMessages({ systemPrompt, userContent: `【聊天记录】\n${history}\n\n【请你现在回应对方】`, maxTokens: 1024, temperature: 0.9 });
+        raw = String(r || '').trim();
+    } catch (e) { raw = `⚠️ ${e.message}`; }
+    const reply = raw.replace(/【(记忆|修改记忆|删除记忆)】.+?(?=\n|$)/g, '').trim();
+
+    messages.push({ senderId: otherId, senderDisplayName: otherName, text: reply });
+    localStorage.setItem('chat_messages', JSON.stringify(map));
+    return { reply };
+}
+
 // ★ 执行目标设立：new→蜕变；merge→合并（无冗余）；reject→保持
 async function applyEstateGoal(container, globalState, onBack, roleId, profile, estate, goal) {
     let refreshTarget = null;   // ★ merge 后原地应刷成目标页
@@ -534,6 +647,7 @@ async function applyEstateGoal(container, globalState, onBack, roleId, profile, 
         cur.maxProgress = verdict.maxProgress || 100;
         cur.ip = verdict.ip || [];
         cur.tags = verdict.tags || [goal];
+        cur.lastProgress = Date.now();   // ★ 进度结算基准：从目标确立起算
         // ★ 建设定义（AI 评估的时段） + owner 的建设日程
         const bt = parseBuildTime(verdict.buildTime);
         cur.buildSched = { time: bt.start, endTime: bt.end, act: verdict.buildAct || `参与${cur.goal}建设` };
@@ -707,12 +821,14 @@ const findPlace = key => getPlace(key) || PLACES[0];
 
 // 房子模板：全局静态配置，房产实例只存 template key（不复制模板）
 const HOUSE_TEMPLATES = {
-    default: { name: '基础小窝', icon: '🏠', price: 0, area: '家', desc: '每个角色都有的默认房子' },
-    apartment: { name: '高层公寓', icon: '🏢', price: 800, area: '住房区', desc: '城里的高层公寓' },
-    shopHouse: { name: '临街小楼', icon: '🏘️', price: 1500, area: '商业街', desc: '商业街旁的二层小楼' },
-    farmHouse: { name: '田园小屋', icon: '🌾', price: 1000, area: '郊外', desc: '带小院子的田园小屋' },
-    villa: { name: '独栋别墅', icon: '🏡', price: 3000, area: '别墅区', desc: '独栋带花园' },
+    default: { name: '基础小窝', icon: '🏠', price: 0, area: '家', desc: '每个角色都有的默认房子', space: 0 },   // default 不参与空间系统
+    apartment: { name: '高层公寓', icon: '🏢', price: 800, area: '住房区', desc: '城里的高层公寓', space: 20 },
+    shopHouse: { name: '临街小楼', icon: '🏘️', price: 1500, area: '商业街', desc: '商业街旁的二层小楼', space: 25 },
+    farmHouse: { name: '田园小屋', icon: '🌾', price: 1000, area: '郊外', desc: '带小院子的田园小屋', space: 30 },
+    villa: { name: '独栋别墅', icon: '🏡', price: 3000, area: '别墅区', desc: '独栋带花园', space: 40 },
 };
+// ★ 房间施工费（金币/格，可调）
+const ROOM_COST_PER_GRID = 60;
 
 // ★ 测试兑换码（调试/验证用，正式发布前移除）
 const REDEEM_CODES = {
@@ -802,7 +918,12 @@ function curScheduleEntry(schedule, hour) {
 async function getJobCounts() {
     const profiles = await getAllProfiles();
     const counts = {};
-    for (const p of profiles) if (p.jobKey) counts[p.jobKey] = (counts[p.jobKey] || 0) + 1;
+    for (const p of profiles) {
+        if (!p.jobKey) continue;
+        const j = getJob(p.jobKey);
+        const k = j ? j.key : p.jobKey;   // ★ 归一化到标准 key（历史脏 jobKey 也算到同一职位下）
+        counts[k] = (counts[k] || 0) + 1;
+    }
     return counts;
 }
 
@@ -1826,7 +1947,12 @@ function showAgencyBuy(container, globalState, onBack, roleId, profile) {
                 name: tpl.name,
                 area: tpl.area,
                 furniture: [],
-                boughtAt: Date.now()
+                boughtAt: Date.now(),
+                home: {   // ★ 毛坯间（根空间）：买到即是一个能直接用的整体大房间
+                    id: 'home_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+                    name: '毛坯间', size: tpl.space || 20, desc: '',
+                    furniture: [], rect: null, rooms: []   // ★ rect 预留平面可视化；rooms 预留房间内再划分
+                }
             });
             // ★ 买独栋别墅 → 解锁私人地产（世界注册表，初始 30 点进度）
             if (card.dataset.tpl === 'villa') {
@@ -1850,9 +1976,32 @@ function showAgencyBuy(container, globalState, onBack, roleId, profile) {
     });
 }
 
-// 房产页面：展示模板外观 + 区域（私有数据，无在场）；返回回"家"选择页
+// 房产页面：室内视角（房产页本身即毛坯间；环境描述 + 休息 + 房间网格）
 function renderPropertyPage(container, globalState, onBack, roleId, profile, prop) {
     const t = HOUSE_TEMPLATES[prop.template] || HOUSE_TEMPLATES.default;
+    const isDefault = prop.template === 'default';
+    // ★ 旧数据兼容：无 home → 兜底生成毛坯根空间（size=模板 space）
+    if (!prop.home) prop.home = { id: 'home_' + Math.random().toString(36).substr(2, 6), name: '毛坯间', size: t.space || 20, desc: '', furniture: [], rect: null, rooms: [] };
+    const home = prop.home;
+    const used = (home.rooms || []).reduce((s, r) => s + (r.size || 0), 0);
+    const left = Math.max(0, (home.size || 0) - used);
+
+    // ★ 房间网格：只放打造的房间（一行两个，透明卡片只有门+名字）
+    const roomGrid = isDefault ? '' : `
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+            ${(home.rooms || []).map(r => `
+            <div class="room-card" data-room="${esc(r.id)}" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:20px 8px;border-radius:16px;background:rgba(255,255,255,0.35);border:1px solid rgba(255,255,255,0.45);cursor:pointer;backdrop-filter:blur(4px);">
+                <div style="font-size:30px;line-height:1;">${r.status === 'building' ? '🚧' : '🚪'}</div>
+                <div style="font-size:13px;font-weight:600;color:#5a5470;">${esc(r.name)}</div>
+                ${r.status === 'building' ? '<div style="font-size:10px;color:#ff9800;">施工中</div>' : ''}
+            </div>`).join('')}
+            <div class="room-card" id="propAddRoom" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:20px 8px;border-radius:16px;background:rgba(124,77,255,0.04);border:1.5px dashed rgba(124,77,255,0.35);cursor:pointer;">
+                <div style="font-size:24px;line-height:1;">＋</div>
+                <div style="font-size:12px;color:#9c6bff;">打造新房间</div>
+                <div style="font-size:10px;color:#999;">剩余 ${left} 格</div>
+            </div>
+        </div>`;
+
     container.innerHTML = `
         <div class="simcity-root">
             <div class="simcity-header">
@@ -1861,18 +2010,140 @@ function renderPropertyPage(container, globalState, onBack, roleId, profile, pro
                 <span class="level">${esc(t.area)}</span>
             </div>
             <div class="simcity-body">
+                ${isDefault ? `
                 <div class="simcity-room">
                     <div class="simcity-item" id="propRest">
                         <div class="item-icon">${t.icon}</div>
                         <div class="item-name">${esc(prop.name || t.name)}</div>
                         <div class="item-desc">${esc(t.desc)}</div>
                     </div>
+                </div>` : `
+                <!-- ★ 环境描述区（房产页本身即毛坯间） -->
+                <div class="simcity-env" style="background:linear-gradient(135deg,rgba(255,255,255,0.85),rgba(239,233,255,0.85));border-radius:18px;padding:16px;margin-bottom:12px;">
+                    <div style="font-size:28px;">${t.icon}</div>
+                    <div style="font-size:15px;font-weight:700;color:#2d2d3a;margin-top:6px;">${esc(prop.name || t.name)}</div>
+                    <div style="font-size:12px;color:#5a5470;margin-top:4px;line-height:1.6;">${esc(t.desc)}${home.size ? ` · 室内空间 ${home.size} 格，已规划 ${used}，剩余 ${left}` : ''}</div>
+                    <div style="height:6px;border-radius:3px;background:rgba(124,77,255,0.12);overflow:hidden;margin-top:10px;">
+                        <div style="height:100%;width:${home.size ? Math.min(100, Math.round(used / home.size * 100)) : 0}%;background:linear-gradient(90deg,#7c4dff,#9c6bff);border-radius:3px;"></div>
+                    </div>
                 </div>
-                <div style="font-size:12px;color:#999;text-align:center;margin-top:10px;">🏠 家具与装修布置中…</div>
+                <!-- ★ 毛坯间里休息（房产页本身即毛坯间） -->
+                <div class="simcity-room">
+                    <div class="simcity-item" id="propRest">
+                        <div class="item-icon">🛏️</div>
+                        <div class="item-name">休息</div>
+                        <div class="item-desc">在${esc(prop.name || t.name)}里小憩，恢复能量</div>
+                    </div>
+                </div>
+                <!-- ★ 房间网格（一行两个） -->
+                ${roomGrid}
+                <div style="font-size:12px;color:#999;text-align:center;margin-top:12px;">🛋️ 家具布置系统开发中…</div>
+                `}
             </div>
         </div>`;
     container.querySelector('#propBack').addEventListener('click', () => renderHome(container, globalState, onBack, roleId, profile));
+    // ★ 休息入口（default 和 毛坯间 都绑）
     container.querySelector('#propRest').addEventListener('click', () => doAction(container, globalState, onBack, roleId, profile, 'rest', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop)));
+    if (!isDefault) {
+        container.querySelector('#propAddRoom').addEventListener('click', () => showBuildRoom(container, globalState, onBack, roleId, profile, prop));
+        // ★ 打造的房间可点击进入
+        container.querySelectorAll('[data-room]').forEach(el => {
+            el.addEventListener('click', () => {
+                const room = (home.rooms || []).find(x => x.id === el.dataset.room);
+                if (room) renderRoomPage(container, globalState, onBack, roleId, profile, prop, room);
+            });
+        });
+    }
+    startDayNightCycle(container);
+}
+
+// ★ 打造新房间：从毛坯根空间划分子空间（树结构；rect 预留平面可视化；家具容量后续）
+function showBuildRoom(container, globalState, onBack, roleId, profile, prop) {
+    const home = prop.home;
+    if (!home) return;
+    const used = (home.rooms || []).reduce((s, r) => s + (r.size || 0), 0);
+    const left = Math.max(0, (home.size || 0) - used);
+    if (left <= 0) { toast('🛠️ 空间已全部规划，没有剩余空间了', '#999'); return; }
+    const overlay = document.createElement('div');
+    overlay.className = 'simcity-pop';
+    overlay.innerHTML = `<div class="simcity-pop-card">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px;">🛠️ 打造新房间</div>
+        <div style="font-size:12px;color:#999;margin-bottom:10px;">${esc(prop.name || '')} · 剩余 ${left} 格 · 施工费 ${ROOM_COST_PER_GRID}金币/格</div>
+        <div style="font-size:13px;color:#333;margin-bottom:6px;">房间名（如：书房、游戏室）</div>
+        <input id="roomName" maxlength="8" placeholder="给房间起个名字" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:10px;font-size:13px;margin-bottom:10px;">
+        <div style="font-size:13px;color:#333;margin-bottom:6px;">房间大小（1~${left} 格，决定家具容量）</div>
+        <input id="roomSize" type="number" min="1" max="${left}" value="${Math.min(5, left)}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:10px;font-size:13px;margin-bottom:10px;">
+        <button id="roomConfirm" style="width:100%;padding:10px;border:none;border-radius:12px;background:linear-gradient(135deg,#7c4dff,#9c6bff);color:#fff;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:6px;">确认打造（${ROOM_COST_PER_GRID}金币/格）</button>
+        <button class="simcity-pop-close" id="roomCancel">取消</button>
+    </div>`;
+    container.appendChild(overlay);
+    let confirming = false;                    // ★ 只防同一次弹窗内重复确认
+    const confirmBtn = overlay.querySelector('#roomConfirm');
+    const cancelBtn = overlay.querySelector('#roomCancel');
+    const closePopup = () => overlay.remove(); // ★ 随时可关（确认前=取消；确认后=关闭，施工继续）
+    cancelBtn.addEventListener('click', closePopup);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePopup(); });
+    confirmBtn.addEventListener('click', async () => {
+        if (confirming) return;
+        const name = overlay.querySelector('#roomName').value.trim();
+        const size = parseInt(overlay.querySelector('#roomSize').value, 10);
+        if (!name) { toast('📝 给房间起个名字吧', '#999'); return; }
+        if (!(size >= 1 && size <= left)) { toast(`🛠️ 大小需在 1~${left} 格之间`, '#999'); return; }
+        const cost = size * ROOM_COST_PER_GRID;
+        if (profile.money < cost) { toast(`💰 金币不足，还差 ${cost - profile.money}`, '#e53935'); return; }
+        // ★ 确认即锁定：扣钱 + 立即 push 占位房间（占用空间）并保存——之后随便切走都安全
+        confirming = true;
+        profile.money -= cost;
+        confirmBtn.disabled = true; confirmBtn.textContent = '⏳ 施工中…';
+        cancelBtn.textContent = '⏳ 后台施工中（可关闭）';
+        const room = { id: 'rm_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4), name, size, desc: '', status: 'building', furniture: [], rect: null, rooms: [] };
+        (home.rooms = home.rooms || []).push(room);
+        await saveProfile(profile, roleId);    // ★ 锁定持久化（切走/刷新都不会超）
+        let desc = '';
+        try {
+            const { callAIWithMessages } = await import('../aiService.js');
+            const raw = await taskManager.watch('cityroom', '房间风格设计', async () => callAIWithMessages({
+                systemPrompt: '你是"模拟小城"的室内设计助手。用一句话（40字以内）描述一个房间的风格氛围，像小说描写一样有画面感，避免AI套话。只输出描述本身，不要任何前缀。',
+                userContent: `房间名：${name}，大小：${size}格，属于${prop.name || '我的家'}。请描述这个房间的风格氛围。`,
+                maxTokens: 200, temperature: 0.9
+            }));
+            desc = (raw || '').trim().slice(0, 60);
+            room.desc = desc; room.status = '';   // ★ 完成：填充描述，解除施工状态
+        } catch (e) {
+            home.rooms = (home.rooms || []).filter(r => r.id !== room.id);   // ★ 失败：解锁空间 + 退款
+            profile.money += cost;
+        }
+        await saveProfile(profile, roleId);
+        // ★ 完成后：弹窗还开着 → 关窗并刷新房产页；已关（用户切走）→ 只 toast 提醒
+        if (overlay.isConnected) {
+            overlay.remove();
+            renderPropertyPage(container, globalState, onBack, roleId, profile, prop);
+        }
+        toast(`🛠️ ${name} 打造完成！${desc ? '「' + desc + '」' : ''}`, '#7c4dff');
+    });
+}
+
+// 房间页面：查看打造的房间（家具布置系统后续）
+function renderRoomPage(container, globalState, onBack, roleId, profile, prop, room) {
+    const t = HOUSE_TEMPLATES[prop.template] || HOUSE_TEMPLATES.default;
+    const building = room.status === 'building';
+    container.innerHTML = `
+        <div class="simcity-root">
+            <div class="simcity-header">
+                <button class="back-btn" id="roomBack">←</button>
+                <span class="title">${t.icon} ${esc(room.name)}</span>
+                <span class="level">${esc(room.size)} 格${building ? ' · 施工中' : ''}</span>
+            </div>
+            <div class="simcity-body">
+                <div class="simcity-env" style="background:linear-gradient(135deg,rgba(255,255,255,0.85),rgba(239,233,255,0.85));border-radius:18px;padding:16px;margin-bottom:12px;">
+                    <div style="font-size:28px;">${building ? '🚧' : '🚪'}</div>
+                    <div style="font-size:15px;font-weight:700;color:#2d2d3a;margin-top:6px;">${esc(room.name)}</div>
+                    <div style="font-size:12px;color:#5a5470;margin-top:4px;line-height:1.6;">${esc(room.desc || (building ? '正在施工…' : '新打造的房间'))}</div>
+                </div>
+                <div style="font-size:12px;color:#999;text-align:center;margin-top:12px;">🛋️ 家具布置系统开发中…</div>
+            </div>
+        </div>`;
+    container.querySelector('#roomBack').addEventListener('click', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop));
     startDayNightCycle(container);
 }
 
@@ -2067,6 +2338,7 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
                         <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f5f5f5;">
                             <div style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0;">${getAvatarHtml(id)}</div>
                             <div style="flex:1;font-size:14px;">${esc(realName(id))} <span style="font-size:12px;color:#999;">未入住</span></div>
+                            <button class="gf-share" data-friend="${esc(id)}" style="flex-shrink:0;border:none;background:#7c4dff;color:#fff;border-radius:12px;padding:5px 12px;font-size:12px;cursor:pointer;">分享</button>
                         </div>`).join('')}
             </div>
             <button class="simcity-pop-close" id="friendClose">关闭</button>
@@ -2087,7 +2359,50 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
             showCityChat(container, roleId, profile, fId, '好友聊天', true, fp);   // ★ 持久，复用已读档案
         });
     });
+    overlay.querySelectorAll('.gf-share').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const fId = btn.dataset.friend;
+            const card = buildShareCard(roleId, profile);
+            // 预览弹窗（简单卡片，视觉后置）
+            const ok = await new Promise(res => {
+                const m = document.createElement('div');
+                m.style.cssText = 'position:fixed;inset:0;z-index:600;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
+                m.innerHTML = `<div style="background:#fff;border-radius:18px;width:300px;padding:20px;text-align:center;">
+                <div style="font-size:40px;">🏙️</div>
+                <div style="font-weight:700;font-size:17px;margin:6px 0;">虚拟小城</div>
+                <div style="font-size:13px;color:#666;line-height:1.8;">${esc(card.name)}（${esc(card.job)}·Lv.${card.level}）<br>金币 ${card.money} · 性格 ${esc(card.traits)}<br>${card.ip ? '世界观 ' + esc(card.ip) + '<br>' : ''}房产 ${card.props} 处</div>
+                <div style="font-size:11px;color:#999;margin-top:8px;">将分享给 ${esc(realName(fId))}</div>
+                <div style="display:flex;gap:10px;margin-top:14px;">
+                    <button id="shareCancel" style="flex:1;border:none;background:#f0f0f0;color:#666;padding:10px;border-radius:12px;cursor:pointer;">取消</button>
+                    <button id="shareOk" style="flex:1;border:none;background:#7c4dff;color:#fff;padding:10px;border-radius:12px;cursor:pointer;">确认分享</button>
+                </div></div>`;
+                document.body.appendChild(m);
+                m.querySelector('#shareCancel').addEventListener('click', () => { m.remove(); res(false); });
+                m.querySelector('#shareOk').addEventListener('click', () => { m.remove(); res(true); });
+            });
+            if (!ok) return;
 
+            const shareText = `【分享】我在玩一款叫「虚拟小城」的游戏！这是我的名片：\n游戏名：${card.name}（${card.job}·Lv.${card.level}）\n金币：${card.money} · 性格：${card.traits}${card.ip ? '\n世界观：' + card.ip : ''}\n要不要也来注册一个？`;
+            try {
+                toast('分享中…');
+                const res = await sendGameShareToChat(roleId, fId, shareText);
+                if (res.agreed) {
+                    const fRealName = realName(fId);
+                    const fp = createDefaultProfile(fRealName);
+                    await saveProfile(fp, fId);
+                    // ★ 立即进内存显示缓存：同一会话内聊天/群聊即可显示游戏名，不必重进小城
+                    charDisplayMap[fId] = { name: fp.name || fRealName, jobKey: '', energy: fp.energy || 100 };
+                    toast(`🎉 ${esc(fRealName)} 同意入住！正在生成小城人设…`, '#7c4dff');
+                    startAiEvaluation(fId, fp, `刚收到「${profile.name}」分享的虚拟小城邀请，同意入住`);
+                    toast(`已注册，重新打开好友列表可见`, '#7c4dff');   // MVP：不强制重渲染
+                } else {
+                    toast(`${realName(fId)} 回复：${res.reply.slice(0, 30)}…`);
+                }
+            } catch (e) {
+                toast('分享失败：' + e.message);
+            }
+        });
+    });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
@@ -2601,12 +2916,32 @@ function pickSimCityNews() {
     return out;
 }
 
+// ★ 动态事件池：AI对话产出的流言/传闻/新闻（跨天保留，靠上限15条自然代谢；衰减后续优化）
+const EVENT_ICON = { rumor: '🗣️', gossip: '💬', news: '📰' };
+const EVENT_TYPE = { '流言': 'rumor', '传闻': 'gossip', '新闻': 'news' };
+
+// 写入全局事件池（去重加热；超15条删最旧）；返回是否变更
+function addWorldEvent(type, text, source, place) {
+    const w = simCityWorld;
+    if (!w) return false;
+    if (!w.events) w.events = [];
+    const key = EVENT_TYPE[type] || 'gossip';
+    const t = String(text || '').trim();
+    if (t.length < 4) return false;
+    const hit = w.events.find(e => e.text === t || e.text.includes(t) || t.includes(e.text));
+    if (hit) { hit.heat = (hit.heat || 1) + 1; hit.ts = Date.now(); return true; }
+    w.events.push({ type: key, text: t, source: source || '', place: place || '', ts: Date.now(), heat: 1 });
+    if (w.events.length > 15) w.events.shift();
+    return true;
+}
+
 // 进小城时确保当天世界状态（跨天自动刷新并写库）
 async function ensureSimCityWorld() {
     const today = dayStr(new Date());
     let w = await getSimCityWorld().catch(() => null);
     if (!w || w.date !== today) {
-        w = { date: today, weather: pickSimCityWeather(), news: pickSimCityNews() };
+        const oldEvents = (w && w.events) || [];        // ★ 跨天保留事件池（衰减后续优化）
+        w = { date: today, weather: pickSimCityWeather(), news: pickSimCityNews(), events: oldEvents };
         await saveSimCityWorld(w).catch(() => { });
     }
     simCityWorld = w;
@@ -2621,6 +2956,11 @@ function simCityWorldText() {
     const parts = [];
     if (wd) parts.push(`${wd.icon}天气：${wd.name}（${wd.prompt}）`);
     if (w.news && w.news.length) parts.push(`今日见闻：${w.news.map(n => `${n.icon}${n.title}`).join('、')}`);
+    // ★ 动态事件池（流言/传闻/新闻）：按热度+时间取top3（跨天保留，靠上限自然代谢）
+    if (w.events && w.events.length) {
+        const top = [...w.events].sort((a, b) => (b.heat || 1) - (a.heat || 1) || b.ts - a.ts).slice(0, 3);
+        parts.push('小城动静：' + top.map(e => `${EVENT_ICON[e.type] || '💬'}「${e.text}」`).join('；'));
+    }
     return parts.join('\n');
 }
 
@@ -2865,28 +3205,42 @@ async function applyCityActions(aiMsgs, roleId, profile, participants) {
         const m = t.match(/【约定】(\d{1,2})[:：](\d{0,2})(?:[，, ]+(.{2,8}))?/);
         if (m) {
             const time = `${String(parseInt(m[1])).padStart(2, '0')}:00`;
-            const place = normalizePlaceName((m[3] || '').trim(), speakerId, fp);
-            if (place) {
-                const fp = await getProfile(speakerId);
-                if (fp) {
-                    if (t.includes('【永久】')) {
-                        const sched = [...(fp.schedule || [])];
-                        sched.push({ time, place, act: `与${profile.name}的约定` });
-                        sched.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-                        fp.schedule = sched;
-                        await saveProfile(fp, speakerId);
-                        done.push(`📅 ${speakerName}永久日程：${time} 在${place}`);
-                    } else {
-                        fp.appointments = [...(fp.appointments || []), { date: today, time, place, act: `与${profile.name}的约定` }];
-                        await saveProfile(fp, speakerId);
-                        done.push(`⏰ ${speakerName}临时约定：今天${time} 在${place}`);
-                    }
-                    upsertCharPlaceIndex(placeIndex, fp, today, speakerId);   // ★ 说话人赴约即时生效
+            // ★ TDZ 修复：先取说话人档案（normalizePlaceName 需要 fp 判断地产可见性，用说话人视角）
+            const fp = await getProfile(speakerId);
+            const place = fp ? normalizePlaceName((m[3] || '').trim(), speakerId, fp) : '';
+            if (fp && place) {
+                if (t.includes('【永久】')) {
+                    const sched = [...(fp.schedule || [])];
+                    sched.push({ time, place, act: `与${profile.name}的约定` });
+                    sched.sort((a, b) => String(a.time).localeCompare(String(b.time)));
+                    fp.schedule = sched;
+                    await saveProfile(fp, speakerId);
+                    done.push(`📅 ${speakerName}永久日程：${time} 在${place}`);
+                } else {
+                    fp.appointments = [...(fp.appointments || []), { date: today, time, place, act: `与${profile.name}的约定` }];
+                    await saveProfile(fp, speakerId);
+                    done.push(`⏰ ${speakerName}临时约定：今天${time} 在${place}`);
                 }
+                upsertCharPlaceIndex(placeIndex, fp, today, speakerId);   // ★ 说话人赴约即时生效
             }
         }
     }
     return done;
+}
+
+// 执行 AI 回复里的事件产出（流言/传闻/新闻 → 全局事件池）
+async function applyEventActions(aiMsgs, placeName) {
+    let changed = false;
+    for (const ai of aiMsgs) {
+        const em = (ai.text || '').match(/【事件：([流言传闻新闻]+)】(.{4,60}?)(?=【|$)/);
+        if (em && addWorldEvent(em[1], em[2].trim(), charName(ai.from), placeName)) changed = true;
+    }
+    if (changed && simCityWorld) await saveSimCityWorld(simCityWorld).catch(() => { });
+}
+
+// ★ 剥离事件标记（AI输出的事件元信息不进入对话文本；事件本身已在 applyEventActions 入库）
+function stripEventMarkers(text) {
+    return (text || '').replace(/【事件：[流言传闻新闻]+】.{4,60}?(?=【|$)/g, '').trim();
 }
 
 // ★ 是否在休息时段（读 AI 的 rest 字段：如"23:00~07:00"）
@@ -3084,18 +3438,21 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
         titleEl.textContent = names.join('、');
     }
 
-    function renderMsgs() {
+    function renderMsgs(fadeFrom = messages.length) {
         renderHeader();   // ★ 标题随参与者实时更新
-        msgsEl.innerHTML = messages.map(m => {
+        msgsEl.innerHTML = messages.map((m, i) => {
             if (m.system || m.from === 'system') {
                 return `<div class="cc-system">${esc(m.text)}</div>`;
             }
             const mine = m.from === roleId;
-            const name = mine ? myDisplay : charName(m.from);   // ★ 气泡统一游戏名（真名只在标题一处）
-            return `<div class="cc-row ${mine ? 'mine' : 'theirs'}">
-                <div class="cc-name">${esc(name)}</div>
-                <div class="cc-bubble ${mine ? 'mine' : 'theirs'}">${esc(m.text)}</div>
-            </div>`;
+            const name = mine ? myDisplay : charName(m.from);
+            const pop = i >= fadeFrom ? ' cc-pop' : '';                        // ★ 只给新增消息加动画
+            const delay = i >= fadeFrom ? `animation-delay:${(i - fadeFrom) * 0.35}s;` : '';
+            const bubbleText = stripEventMarkers(m.text || '');                // ★ 渲染兜底：隐藏事件标记（历史残留也干净）
+            return `<div class="cc-row ${mine ? 'mine' : 'theirs'}${pop}" style="${delay}">
+            <div class="cc-name">${esc(name)}</div>
+            <div class="cc-bubble ${mine ? 'mine' : 'theirs'}">${esc(bubbleText)}</div>
+        </div>`;
         }).join('');
         msgsEl.scrollTop = msgsEl.scrollHeight;
     }
@@ -3161,6 +3518,19 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
         }
     }
     renderMsgs();
+    // ★ 注册"自动重开"能力（新窗口覆盖旧窗口；key 区分对话，临时对话带地点）
+    const chatKey = gcId ? 'g:' + gcId : (persist ? 'p:' + pairKey : 'p:' + pairKey + '@' + placeName);
+    activeChatRefresh = {
+        key: chatKey,
+        overlay,
+        reload: async () => {
+            if (!overlay.isConnected) return;      // 窗口又关了 → 跳过（数据已保存）
+            if (persist) messages = (await getChatMessages(pairKey)).filter(m => !m.temp);
+            else if (gcId) messages = await getGroupChatMessages(gcId);
+            else messages = (await getChatMessages(pairKey)).filter(m => m.temp && m.place === placeName);
+            renderMsgs(messages.length);
+        }
+    };
 
     // ★ 写群聊归属：注册表集中记录（participants 动态 + type），2 人时合并独立单聊历史（数据不重复：迁移+删原）
     async function registerGroupChat(ids) {
@@ -3438,8 +3808,9 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                         '4. 角色有自己的信息视角，各个角色对其他角色的熟知度也会有区别，根据角色间的关系和给到的认知信息进行对话；没有给出的关系、对方真实身份、未参与时的对话，不得假设或编造。新加入的角色不知道加入前的对话，若相关就让TA自然询问或保持不知情。\n' +
                         '5. 回应简短（每人20~60字）。\n' +
                         '6. 若有人提出约定或加好友：同意 → 在该角色那行末尾加标记。约定：【约定】HH:MM地点（临时）或【约定】HH:MM地点【永久】（表示该角色自己会按时赴约，谁说的约定就属于谁）；加好友：【加好友@对方游戏名】（@后必须是在场者的确切游戏名，系统按游戏名登记；群聊内任意角色可互相加，也可加' + promptMyName + '）；拒绝 → 自然拒绝，不加标记。\n' +
+                        '7. 若对话中出现了值得被记住的新信息（新鲜事/八卦/传闻/重大事件），可在该角色那行末尾加【事件：流言|传闻|新闻】内容（流言=不确定/八卦，传闻=半确定，新闻=确定事实）\n' +
 
-                        '7. 只输出对话内容（可含上述标记），不要任何解释'
+                        '8. 只输出对话内容（可含上述标记），不要任何解释'
                         : '你是"模拟小城"的居民。现在有人和你聊天。要求：\n' +
                         '1. 完全以你的小城身份回应，自然口语化，像真人聊天，避免AI腔\n' +
                         (isRemote
@@ -3452,6 +3823,8 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                         '   同意约定 → 回复末尾加【约定】HH:MM 地点（临时约定）；长期约定加【约定】HH:MM 地点【永久】（约定属于你自己，你会按时赴约）\n' +
                         '   同意加好友 → 回复末尾加【加好友】（表示你同意和他/她互为游戏好友）\n' +
                         '   不想答应 → 自然委婉拒绝，不要输出任何标记\n' +
+                        '   若对话中出现了值得被记住的新信息（新鲜事/八卦/传闻/重大事件），可在回复末尾加【事件：流言|传闻|新闻】内容（流言=不确定/八卦，传闻=半确定，新闻=确定事实）\n' +
+
                         '5. 只输出对话内容（可含上述标记），不要任何解释',
 
                     userContent: `${simCityWorldText() ? '【今日小城】\n' + simCityWorldText() + '\n\n' : ''}${myInfo}\n\n` +
@@ -3464,56 +3837,65 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                             (isGroupChat ? `${charName(friendId)}正在「${friendAct || ('在' + placeName + '待着')}」` : `你正在「${friendAct || ('在' + placeName + '待着')}」`) + `\n\n`) +
                         `【对话历史】\n${history || '（刚开始聊）'}\n\n` +
                         `请以${groupMode ? '在场者的身份' : '你的身份'}回复${promptMyName}最近这句话：「${text}」`,
-                    maxTokens: 800, temperature: 0.85
+                    maxTokens: isGroupChat() ? 1400 : 800, temperature: 0.85
                 });
             });
-            const chatClosed = !overlay.isConnected;   // ★ 先记住窗口是否已关闭（AI 返回后照常保存，不丢弃）
 
 
-            // ★ 群聊：拆行解析「名字：内容」；双人：整段归好友
+            // ★ 名字规范化：去空白 + 去尾部称呼后缀（号/先生/小姐/女士/同学/老师…），大小写不敏感
+            //   AI 常省略"号"字（"GM4号"→"GM4"），规范化让简称也能锁定到人
+            const normName = n => String(n || '').replace(/\s+/g, '').replace(/[号先生小姐女士同学老师]$/g, '').toLowerCase();
+
             let aiMsgs = [];
             if (isGroupChat) {
                 const lines = (reply || '').split('\n').map(s => s.trim()).filter(Boolean);
                 for (const ln of lines) {
                     const m = /^(.+?)[：:](.+)$/.exec(ln);
                     if (m) {
-                        // ★ 锁定式匹配：只在当前对话参与者里找；排除主视角（AI 不得替主视角说话）
                         const nm = m[1].trim();
-                        const exact = participants.find(pid => pid !== roleId && charName(pid) === nm && getCharacterNameById(pid) === nm);
-                        const speaker = exact || participants.find(pid => pid !== roleId && (charName(pid) === nm || getCharacterNameById(pid) === nm));
-                        if (speaker) {
-                            aiMsgs.push({ from: speaker, text: m[2].trim() });
-                        } else {
-                            // ★ 匹配不到在场者：消息仍展示，但禁止动作解析（不写约定/加好友）
-                            aiMsgs.push({ from: friendId, text: m[2].trim(), noAction: true });
+                        const others = participants.filter(pid => pid !== roleId);
+                        // ① 精确匹配：游戏名或真名完全相等
+                        let pool = others.filter(pid => charName(pid) === nm || getCharacterNameById(pid) === nm);
+                        // ② 规范化匹配：精确无命中时启用（"GM4" ↔ "GM4号"）
+                        if (!pool.length) {
+                            const nn = normName(nm);
+                            pool = others.filter(pid =>
+                                normName(charName(pid)) === nn ||
+                                (getCharacterNameById(pid) && normName(getCharacterNameById(pid)) === nn));
                         }
+                        // ③ 歧义保护：命中 >1 视为无法锁定 → 丢弃该行，绝不挂到 friendId 名下
+                        const speaker = pool.length === 1 ? pool[0] : null;
+                        if (speaker) aiMsgs.push({ from: speaker, text: m[2].trim() });
                     } else if (aiMsgs.length) {
-                        aiMsgs[aiMsgs.length - 1].text += '\n' + ln;
-                    } else {
-                        aiMsgs.push({ from: friendId, text: ln });
+                        aiMsgs[aiMsgs.length - 1].text += '\n' + ln;   // 续行：接上一条发言
                     }
+                    // 无名字的首行：丢弃（AI 未按格式输出，宁可不显示也不挂错人）
                 }
+                // 整段都无可归属的行（如 AI 完全没按格式）→ 兜底给 friendId，保证回复不静默
                 if (!aiMsgs.length) aiMsgs.push({ from: friendId, text: reply });
             } else {
                 aiMsgs.push({ from: friendId, text: reply });
             }
-
+            const startIdx = messages.length;   // ★ 记录 AI 回复加入前的索引（群聊逐条浮现用）
             // ★ 在 aiMsgs 归属完成后再执行游戏内操作（谁说的写谁）
             const actions = await applyCityActions(aiMsgs, roleId, profile, participants);
+            await applyEventActions(aiMsgs, placeName);   // ★ 事件产出 → 全局事件池（流言/传闻/新闻）
             for (const ai of aiMsgs) {
-                const replyMsg = { id: 'scm_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4), from: ai.from, to: roleId, text: ai.text.trim(), time: Date.now() };
+                const cleanText = stripEventMarkers(ai.text.trim());   // ★ 剥离事件标记（事件已入库）
+                if (!cleanText) continue;                              // ★ 纯事件产出：不显示气泡
+                const replyMsg = { id: 'scm_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4), from: ai.from, to: roleId, text: cleanText, time: Date.now() };
                 messages.push(replyMsg);
                 if (persist) await saveChatMessage(pairKey, replyMsg);
                 else await saveChatMessage(pairKey, { ...replyMsg, temp: true, place: placeName, ...(gcId ? { groupId: gcId } : {}) });
                 await leaveOtherGroupChats(ai.from, gcId);   // ★ 发言即"参与了另一场对话"→ 从其他群聊退出（skip 当前窗口）
             }
-            // ★ 窗口已关闭：回复与 actions 都已落库，不渲染，只提醒
-            if (chatClosed) {
-                toast(`💬 ${friendName} 已回复（窗口已关闭，回复已保存）`, '#0b93f6');
-                if (actions.length) toast(actions.join('、'), '#2e7d32');
-                return;
+            // ★ 原窗口还开着 → 内存渲染（零读库，最快路径）
+            if (overlay.isConnected) {
+                renderMsgs(isGroupChat() ? startIdx : messages.length);   // 群聊逐条浮现；双人立即显示
+            } else if (activeChatRefresh && activeChatRefresh.key === chatKey && activeChatRefresh.overlay !== overlay) {
+                // ★ 原窗口关了且重开过 → 自动重开新窗口（重读存储 + 渲染）
+                await activeChatRefresh.reload();
             }
-            renderMsgs();
             await maybeLeave();
             if (actions.length) toast(actions.join('、'), '#2e7d32');
         } catch (e) {

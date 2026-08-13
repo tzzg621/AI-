@@ -278,6 +278,12 @@
 .cc-row { display: flex; flex-direction: column; margin-bottom: 10px; }
 .cc-row.mine { align-items: flex-end; }
 .cc-row.theirs { align-items: flex-start; }
+/* ★ 群聊气泡逐条浮现 */
+.cc-row.cc-pop { animation: ccFadeUp .3s ease both; }
+@keyframes ccFadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+}
 .cc-name { font-size: 10px; color: #bbb; margin: 0 6px 3px; }
 .cc-bubble { max-width: 72%; padding: 9px 13px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .cc-bubble.mine {

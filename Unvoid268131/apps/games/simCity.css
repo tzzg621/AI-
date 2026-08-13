@@ -1,0 +1,534 @@
+/* apps/games/simCity.css — 模拟小城（手机原生感 UI 重构 + 全局日夜联动） */
+
+/* ============ 主题与基础 ============ */
+.simcity-root {
+    --sc-primary: #7c4dff;
+    --sc-primary2: #9c6bff;
+    --sc-blue: #0b93f6;
+    --sc-orange: #ff9800;
+    --sc-green: #2e7d32;
+    --sc-card: rgba(255,255,255,0.9);
+    --sc-shadow: 0 2px 12px rgba(80,60,160,0.08);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, #edf2ff 0%, #f6f1ff 45%, #fdf7ff 100%);
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', Arial, sans-serif;
+    color: #2d2d3a;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    
+}
+
+/* ============ 顶部栏（毛玻璃） ============ */
+.simcity-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: blur(18px) saturate(1.5);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+    box-shadow: 0 1px 12px rgba(124,77,255,0.1);
+    flex-shrink: 0; z-index: 20;
+}
+.simcity-header .back-btn {
+    border: none; background: none; font-size: 20px; color: #555;
+    cursor: pointer; padding: 4px 8px; margin-left: -8px;
+    min-width: 40px; min-height: 40px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+}
+.simcity-header .back-btn:active { background: rgba(124,77,255,0.1); }
+.simcity-header .title { font-weight: 700; font-size: 16px; color: #2d2d3a; letter-spacing: .3px; }
+.simcity-header .level { font-size: 12px; color: var(--sc-primary); font-weight: 600; background: rgba(124,77,255,0.08); padding: 4px 10px; border-radius: 20px; }
+
+/* ============ 滚动区 ============ */
+.simcity-body { flex: 1; overflow-y: auto; padding: 12px 14px 20px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.simcity-body::-webkit-scrollbar { display: none; }
+
+/* ============ 角色卡 ============ */
+.simcity-char { display: flex; align-items: center; gap: 12px; background: var(--sc-card); border: 1px solid rgba(255,255,255,0.7); border-radius: 18px; padding: 14px; margin-bottom: 12px; box-shadow: var(--sc-shadow); }
+.simcity-char .avatar { width: 54px; height: 54px; border-radius: 50%; overflow: hidden; flex-shrink: 0; border: 2px solid rgba(124,77,255,0.25); }
+.simcity-char .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.simcity-char .cname { font-weight: 700; font-size: 16px; color: #2d2d3a; }
+.simcity-char .cname small { font-size: 12px; color: #999; font-weight: 400; }
+.simcity-char .cjob { font-size: 12px; color: #999; margin-top: 3px; }
+
+/* ============ 天气/见闻横幅 ============ */
+.simcity-weather-bar {
+    display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+    background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(239,233,255,0.92));
+    border: 1px solid rgba(124,77,255,0.12); border-radius: 16px;
+    padding: 10px 14px; margin-bottom: 12px;
+    box-shadow: 0 2px 10px rgba(124,77,255,0.06);
+    font-size: 12px; color: #5a5470;
+}
+.simcity-weather-bar span { display: inline-flex; align-items: center; gap: 5px; }
+.simcity-weather-bar .sw-news { color: var(--sc-primary); font-weight: 600; }
+
+/* ============ 属性条（进度条化） ============ */
+.simcity-stats { display: flex; justify-content: space-between; background: var(--sc-card); border: 1px solid rgba(255,255,255,0.7); border-radius: 18px; padding: 12px 10px; margin-bottom: 12px; box-shadow: var(--sc-shadow); }
+.simcity-stat { text-align: center; flex: 1; padding: 0 4px; }
+.simcity-stat .stat-ico { font-size: 17px; line-height: 1.2; }
+.simcity-stat .stat-v { font-weight: 700; font-size: 15px; color: #2d2d3a; margin-top: 2px; }
+.simcity-stat .stat-bar { height: 5px; border-radius: 3px; background: #f0eef6; overflow: hidden; margin: 6px 8px 4px; }
+.simcity-stat .stat-bar i { display: block; height: 100%; width: var(--p, 0%); background: linear-gradient(90deg, #0b93f6, #4fc3f7); border-radius: 3px; transition: width .5s ease; }
+.simcity-stat .stat-bar.mood i { background: linear-gradient(90deg, #ff9800, #ffc24b); }
+.simcity-stat .stat-k { font-size: 11px; color: #999; }
+
+/* ============ 小城地图（左右滑动分页） ============ */
+.simcity-map-wrap { position: relative; margin-bottom: 12px; }
+.simcity-map {
+    position: relative; border-radius: 20px;
+    background: radial-gradient(circle at 20% 15%, rgba(255,255,255,0.8), transparent 55%), linear-gradient(135deg, #d8ecff 0%, #e6dcff 100%);
+    box-shadow: inset 0 0 30px rgba(255,255,255,0.55), 0 3px 14px rgba(80,60,160,0.08);
+    display: flex; overflow-x: auto; scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.simcity-map::-webkit-scrollbar { display: none; }
+.simcity-pages { display: flex; flex: 1; }
+.simcity-page { position: relative; flex: 0 0 100%; scroll-snap-align: start; padding: 14px 14px 28px; box-sizing: border-box; min-width: 0; }
+.simcity-page::before {
+    content: ''; position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px);
+    background-size: 26px 26px; pointer-events: none;
+}
+.simcity-grid { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.simcity-plot {
+    background: rgba(255,255,255,0.92); border: 1px solid rgba(255,255,255,0.9);
+    border-radius: 16px; padding: 12px 6px 10px; text-align: center; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(80,60,160,0.07);
+    transition: transform .15s, box-shadow .15s;
+}
+.simcity-plot:hover { transform: translateY(-2px); box-shadow: 0 5px 16px rgba(124,77,255,0.16); }
+.simcity-plot:active { transform: scale(0.94); }
+.simcity-plot img { width: 46px; height: 46px; border-radius: 12px; object-fit: cover; margin: 0 auto 6px; display: block; }
+.simcity-plot .icon { font-size: 34px; line-height: 46px; }
+.simcity-plot .name { font-size: 13px; font-weight: 600; color: #2d2d3a; }
+.simcity-plot .desc { font-size: 10px; color: #999; margin-top: 2px; }
+
+/* 地图页指示器 */
+.simcity-mapdots { position: absolute; bottom: 8px; left: 0; right: 0; display: flex; justify-content: center; gap: 5px; z-index: 3; pointer-events: none; }
+.simcity-mapdots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.7); box-shadow: 0 0 0 1px rgba(124,77,255,0.15); transition: all .25s; }
+.simcity-mapdots i.on { width: 16px; border-radius: 4px; background: var(--sc-primary); }
+
+/* ============ 地图日夜更替（时段 class 挂 root，整页联动） ============ */
+/* 白天（默认，已在上方 .simcity-map 定义） */
+.simcity-root.sc-dawn .simcity-map {
+    background: radial-gradient(circle at 20% 15%, rgba(255,255,255,0.8), transparent 55%), linear-gradient(135deg, #ffe9d2 0%, #d8ecff 100%);
+}
+.simcity-root.sc-dusk .simcity-map {
+    background: radial-gradient(circle at 70% 20%, rgba(255,220,180,0.7), transparent 50%), linear-gradient(135deg, #ff9e6d 0%, #c97b9d 100%);
+}
+.simcity-root.sc-night .simcity-map {
+    background:
+        radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.8), transparent),
+        radial-gradient(1px 1px at 60% 15%, rgba(255,255,255,0.6), transparent),
+        radial-gradient(1.5px 1.5px at 80% 40%, rgba(255,255,255,0.7), transparent),
+        radial-gradient(1px 1px at 35% 55%, rgba(255,255,255,0.5), transparent),
+        radial-gradient(1px 1px at 75% 70%, rgba(255,255,255,0.6), transparent),
+        linear-gradient(135deg, #16224a 0%, #2a3a6e 100%);
+}
+
+/* 夜晚：网格线调暗、地点卡片转深色、圆点适配 */
+.simcity-root.sc-night .simcity-map .simcity-page::before {
+    background-image: linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px);
+}
+.simcity-root.sc-night .simcity-map .simcity-plot {
+    background: rgba(42,54,96,0.92);
+    border-color: rgba(120,140,200,0.2);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.simcity-root.sc-night .simcity-map .simcity-plot .name { color: #dfe6ff; }
+.simcity-root.sc-night .simcity-map .simcity-plot .desc { color: #8a94c0; }
+.simcity-root.sc-night .simcity-mapdots i { background: rgba(255,255,255,0.25); box-shadow: none; }
+.simcity-root.sc-night .simcity-mapdots i.on { background: var(--sc-primary); }
+
+/* ============ 室外地点日夜（深色灯光感；室内另有全局深色暖调） ============ */
+.simcity-root.sc-dusk .simcity-room.sc-outdoor {
+    background: linear-gradient(180deg, rgba(255,214,170,0.9), rgba(255,190,160,0.75)), radial-gradient(circle at 50% 120%, rgba(124,77,255,0.1), transparent 60%);
+}
+.simcity-root.sc-dawn .simcity-room.sc-outdoor {
+    background: linear-gradient(180deg, rgba(255,238,215,0.9), rgba(216,236,255,0.8)), radial-gradient(circle at 50% 120%, rgba(124,77,255,0.08), transparent 60%);
+}
+.simcity-root.sc-night .simcity-room.sc-outdoor {
+    background: linear-gradient(180deg, rgba(28,38,66,0.94), rgba(42,54,96,0.88)), radial-gradient(circle at 50% 120%, rgba(124,77,255,0.18), transparent 60%);
+    box-shadow: inset 0 0 24px rgba(0,0,0,0.35), 0 3px 14px rgba(0,0,0,0.15);
+}
+.simcity-root.sc-night .simcity-room.sc-outdoor .simcity-item {
+    background: rgba(44,56,98,0.92);
+    border-color: rgba(120,140,200,0.2);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.simcity-root.sc-night .simcity-room.sc-outdoor .simcity-item .item-name { color: #dfe6ff; }
+.simcity-root.sc-night .simcity-room.sc-outdoor .simcity-item .item-desc { color: #8a94c0; }
+.simcity-root.sc-night .simcity-room.sc-outdoor .simcity-env {
+    background: linear-gradient(135deg, rgba(124,77,255,0.22), rgba(11,147,246,0.15)), rgba(30,40,70,0.8);
+    border-color: rgba(120,140,200,0.2);
+}
+.simcity-root.sc-night .simcity-room.sc-outdoor .simcity-env .env-name { color: #dfe6ff; }
+.simcity-root.sc-night .simcity-room.sc-outdoor .simcity-env .env-desc { color: #aab3d8; }
+
+/* ============ 底部操作栏（固定底栏 + 安全区） ============ */
+.simcity-actions {
+    display: flex; gap: 10px; padding: 10px 14px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    background: rgba(250,248,255,0.86);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border-top: 1px solid rgba(124,77,255,0.1);
+    flex-shrink: 0;
+}
+.simcity-btn {
+    flex: 1; border: none; border-radius: 14px; min-height: 46px; padding: 0 8px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    background: rgba(255,255,255,0.95); color: #2d2d3a;
+    box-shadow: 0 2px 10px rgba(80,60,160,0.08);
+    transition: transform .12s, box-shadow .12s;
+}
+.simcity-btn:active { transform: scale(0.96); }
+.simcity-btn.primary {
+    background: #7c4dff;                                   /* ★ 兜底：var 失效时仍是可见的紫底 */
+    background: linear-gradient(135deg, var(--sc-primary), var(--sc-primary2));   /* 正常时用主题变量 */
+    color: #fff;
+    box-shadow: 0 4px 14px rgba(124,77,255,0.3);
+}
+
+/* ============ 地点房间 ============ */
+.simcity-room {
+    background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.55)), radial-gradient(circle at 50% 120%, rgba(124,77,255,0.08), transparent 60%);
+    border-radius: 20px; padding: 16px 14px;
+    box-shadow: inset 0 0 24px rgba(124,77,255,0.05), 0 3px 14px rgba(80,60,160,0.07);
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 220px;
+}
+.simcity-item {
+    background: rgba(255,255,255,0.92); border: 1px solid rgba(255,255,255,0.85);
+    border-radius: 16px; padding: 18px 8px; text-align: center; cursor: pointer;
+    box-shadow: 0 2px 10px rgba(80,60,160,0.06);
+    transition: transform .15s, box-shadow .15s;
+}
+.simcity-item:active { transform: scale(0.95); }
+.simcity-item img { width: 54px; height: 54px; border-radius: 12px; object-fit: cover; margin: 0 auto 6px; display: block; }
+.simcity-item .item-icon { font-size: 44px; line-height: 56px; }
+.simcity-item .item-name { font-size: 14px; font-weight: 600; color: #2d2d3a; }
+.simcity-item .item-desc { font-size: 11px; color: #999; margin-top: 4px; }
+
+/* ============ 环境卡 ============ */
+.simcity-env {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, rgba(124,77,255,0.1), rgba(11,147,246,0.08)), rgba(255,255,255,0.8);
+    border: 1px solid rgba(124,77,255,0.12); border-radius: 16px; padding: 16px 14px; text-align: center;
+    box-shadow: inset 0 0 20px rgba(124,77,255,0.05);
+}
+.simcity-env .env-icon { font-size: 40px; line-height: 50px; }
+.simcity-env .env-name { font-size: 14px; font-weight: 700; color: #4a3f6b; margin-top: 4px; }
+.simcity-env .env-desc { font-size: 11px; color: #8a7fa8; margin-top: 4px; line-height: 1.6; }
+
+/* ============ 在场角色 ============ */
+.sc-present { background: var(--sc-card); border: 1px solid rgba(255,255,255,0.7); border-radius: 16px; padding: 12px; margin: 12px 0; box-shadow: var(--sc-shadow); }
+.sc-present-hd { font-size: 12px; font-weight: 700; color: #7a6f9a; margin-bottom: 6px; }
+.sc-person { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f5f2fb; }
+.sc-person:last-child { border-bottom: none; }
+.sc-person .avatar { width: 36px; height: 36px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
+.sc-person .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sc-person .sc-name { flex: 1; font-size: 13px; font-weight: 600; color: #2d2d3a; min-width: 0; }
+.sc-person .sc-name small { font-size: 11px; color: #bbb; font-weight: 400; margin-left: 4px; }
+.sc-btn { border: none; border-radius: 12px; padding: 7px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0; transition: transform .1s; }
+.sc-btn:active { transform: scale(0.93); }
+.sc-btn.enc { background: rgba(124,77,255,0.1); color: var(--sc-primary); }
+.sc-btn.chat { background: var(--sc-blue); color: #fff; }
+
+/* ============ 弹窗（带动画） ============ */
+.simcity-pop { position: absolute; inset: 0; z-index: 50; background: rgba(20,15,40,0.45); display: flex; align-items: center; justify-content: center; animation: scFade .18s ease; }
+.simcity-pop-card { background: #fff; border-radius: 20px; width: min(300px, 88%); padding: 18px; max-height: 80%; display: flex; flex-direction: column; box-shadow: 0 16px 50px rgba(20,15,40,0.25); animation: scPop .22s cubic-bezier(.2,.9,.3,1.2); }
+.simcity-pop-list { flex: 1; overflow-y: auto; }
+.simcity-pop-close { width: 100%; margin-top: 12px; padding: 10px; border: none; border-radius: 12px; background: #f2f0f8; color: #666; cursor: pointer; font-size: 13px; }
+@keyframes scFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scPop { from { opacity: 0; transform: translateY(16px) scale(.97); } to { opacity: 1; transform: none; } }
+
+/* ============ 回忆册 ============ */
+.story-empty { font-size: 12px; color: #999; padding: 8px 0; }
+.story-card {
+    position: relative; padding: 12px 14px; margin-bottom: 10px;
+    background: linear-gradient(135deg, #fdf6ec, #fef9ef); border: 1px solid rgba(255,255,255,0.8);
+    border-radius: 14px; cursor: pointer; box-shadow: 0 2px 8px rgba(120,80,40,0.06);
+    transition: transform .15s, box-shadow .15s;
+}
+.story-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(120,80,40,0.12); }
+.story-card:active { transform: scale(0.97); }
+.story-summary { font-size: 14px; font-weight: 600; color: #4e342e; line-height: 1.5; padding-right: 24px; }
+.story-meta { font-size: 11px; color: #bcaaa4; margin-top: 6px; }
+.story-del { position: absolute; top: 8px; right: 8px; border: none; background: none; color: #d7ccc8; cursor: pointer; font-size: 14px; }
+.story-del:hover { color: #c62828; }
+.story-detail-card { background: #fff; border-radius: 20px; width: min(300px, 88%); padding: 20px; max-height: 80%; display: flex; flex-direction: column; box-shadow: 0 16px 50px rgba(20,15,40,0.25); animation: scPop .22s ease; }
+.story-detail-title { font-size: 16px; font-weight: 700; color: #4e342e; margin-bottom: 10px; }
+.story-detail-text { flex: 1; overflow-y: auto; font-size: 13px; line-height: 1.8; color: #5d4037; white-space: pre-wrap; }
+.story-detail-meta { font-size: 11px; color: #bcaaa4; margin-top: 10px; }
+.story-detail-close { width: 100%; margin-top: 10px; padding: 9px; border: none; border-radius: 12px; background: #f5f0eb; color: #8d6e63; cursor: pointer; font-size: 13px; }
+
+/* ============ 聊天（底部抽屉） ============ */
+.cc-sheet { background: #f7f6fb; border-radius: 22px 22px 0 0; width: 100%; max-height: 75%; display: flex; flex-direction: column; box-shadow: 0 -12px 44px rgba(20,15,40,0.22); animation: scSheet .28s cubic-bezier(.2,.9,.3,1); }
+@keyframes scSheet { from { transform: translateY(40px); opacity: .6; } to { transform: none; opacity: 1; } }
+.cc-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(255,255,255,0.8); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid #eee; }
+.cc-head .avatar { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
+.cc-head .avatar img { width: 100%; height: 100%; object-fit: cover; }
+.cc-title { font-size: 14px; font-weight: 700; color: #2d2d3a; }
+.cc-sub { font-size: 11px; color: #999; }
+.cc-close { border: none; background: rgba(0,0,0,0.04); width: 30px; height: 30px; border-radius: 50%; font-size: 14px; color: #999; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+#ccMsgs { flex: 1; overflow-y: auto; padding: 12px; min-height: 200px; }
+.cc-row { display: flex; flex-direction: column; margin-bottom: 10px; }
+.cc-row.mine { align-items: flex-end; }
+.cc-row.theirs { align-items: flex-start; }
+/* ★ 群聊气泡逐条浮现 */
+.cc-row.cc-pop { animation: ccFadeUp .3s ease both; }
+@keyframes ccFadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+}
+.cc-name { font-size: 10px; color: #bbb; margin: 0 6px 3px; }
+.cc-bubble { max-width: 72%; padding: 9px 13px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.cc-bubble.mine {
+    background: linear-gradient(135deg, #0a7fe0, #0b93f6);   /* 更深的蓝，白字清晰 */
+    color: #fff;
+    font-weight: 500;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.15);
+    border-radius: 16px 16px 4px 16px;
+}
+.cc-bubble.theirs { background: #fff; color: #333; border-radius: 16px 16px 16px 4px; box-shadow: 0 1px 4px rgba(80,60,160,0.06); }
+.cc-system { text-align: center; font-size: 11px; color: #aaa; margin: 10px 0; }
+.cc-inputbar { display: flex; gap: 8px; padding: 10px 12px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); background: rgba(255,255,255,0.92); border-top: 1px solid #eee; }
+#ccInput { flex: 1; border: none; background: #f2f0f7; border-radius: 20px; padding: 10px 14px; font-size: 14px; outline: none; }
+#ccSend { border: none; background: linear-gradient(135deg, var(--sc-blue), #3aa7f8); color: #fff; border-radius: 20px; padding: 10px 18px; font-size: 14px; cursor: pointer; font-weight: 600; }
+
+/* ============ 杂项 ============ */
+.simcity-note { font-size: 12px; color: #999; text-align: center; margin-top: 12px; }
+
+/* ============ 角色状态侧边抽屉 ============ */
+.simcity-sheet {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(320px, 86%);
+    background: #fff; border-radius: 20px 0 0 20px; z-index: 60;
+    display: flex; flex-direction: column;
+    box-shadow: -8px 0 30px rgba(20,15,40,0.18);
+    animation: scSheetRight .28s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes scSheetRight { from { transform: translateX(100%); } to { transform: none; } }
+.sc-sheet-hd { display: flex; align-items: center; gap: 10px; padding: 16px; border-bottom: 1px solid #f0eef6; }
+.sc-sheet-hd .avatar { width: 48px; height: 48px; border-radius: 50%; overflow: hidden; flex-shrink: 0; border: 2px solid rgba(124,77,255,0.25); }
+.sc-sheet-hd .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sc-sheet-name { font-weight: 700; font-size: 15px; color: #2d2d3a; }
+.sc-sheet-name small { font-size: 12px; color: #999; font-weight: 400; }
+.sc-sheet-job { font-size: 12px; color: #7a6f9a; margin-top: 2px; }
+.sc-sheet-body { flex: 1; overflow-y: auto; padding: 12px 16px 20px; }
+.sc-sec { margin-bottom: 16px; }
+.sc-sec-hd { font-size: 12px; font-weight: 700; color: #7a6f9a; margin-bottom: 8px; }
+.sc-sec-hd small { font-weight: 400; color: #aaa; margin-left: 4px; }
+.sc-stats { display: flex; gap: 10px; margin-bottom: 8px; }
+.sc-stat { flex: 1; background: #f7f5fc; border-radius: 12px; padding: 10px; text-align: center; }
+.sc-stat span { display: block; font-size: 11px; color: #999; }
+.sc-stat b { font-size: 16px; color: #2d2d3a; }
+.sc-bar-row { margin: 6px 0; }
+.sc-bar-row span { font-size: 12px; color: #555; display: block; margin-bottom: 4px; }
+.sc-bar { height: 6px; border-radius: 3px; background: #f0eef6; overflow: hidden; }
+.sc-bar i { display: block; height: 100%; background: linear-gradient(90deg, #0b93f6, #4fc3f7); border-radius: 3px; }
+.sc-bar.mood i { background: linear-gradient(90deg, #ff9800, #ffc24b); }
+.sc-career { background: #f7f5fc; border-radius: 12px; padding: 10px; margin-bottom: 8px; }
+.sc-career-hd { font-size: 13px; font-weight: 600; color: #2d2d3a; display: flex; align-items: center; justify-content: space-between; }
+.sc-lv { font-size: 11px; color: var(--sc-primary); background: rgba(124,77,255,0.1); padding: 2px 8px; border-radius: 10px; }
+.sc-career-bar { height: 5px; border-radius: 3px; background: #e8e4f2; overflow: hidden; margin: 8px 0 4px; }
+.sc-career-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--sc-primary), var(--sc-primary2)); border-radius: 3px; }
+.sc-career-exp { font-size: 11px; color: #999; }
+.sc-prop { font-size: 13px; color: #333; background: #f7f5fc; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.sc-prop small { color: #999; }
+.sc-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.sc-tag { font-size: 12px; color: var(--sc-primary); background: rgba(124,77,255,0.1); border-radius: 10px; padding: 4px 10px; }
+.sc-mem { font-size: 12px; color: #555; line-height: 1.6; background: linear-gradient(135deg, #fdf6ec, #fef9ef); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.sc-empty { font-size: 12px; color: #aaa; padding: 6px 0; }
+
+/* ============ 全局日夜：整页背景 + 卡片 + 头部/底栏联动 ============ */
+.simcity-root.sc-dawn {
+    background: linear-gradient(180deg, #fff3e0 0%, #ffe9d2 40%, #d8ecff 100%);
+}
+.simcity-root.sc-dusk {
+    background: linear-gradient(180deg, #ffd9b3 0%, #ffb59a 40%, #b96a92 100%);
+}
+.simcity-root.sc-night {
+    background: linear-gradient(180deg, #0e1834 0%, #16224a 45%, #1c2a52 100%);
+    color: #dfe6ff;
+}
+
+/* 夜晚：头部 + 底栏 */
+.simcity-root.sc-night .simcity-header {
+    background: rgba(20,30,64,0.82);
+    box-shadow: 0 1px 12px rgba(0,0,0,0.3);
+}
+.simcity-root.sc-night .simcity-header .back-btn { color: #c6cff0; }
+.simcity-root.sc-night .simcity-header .title { color: #e8ecff; }
+.simcity-root.sc-night .simcity-header .level { background: rgba(124,77,255,0.3); color: #cdbfff; }
+.simcity-root.sc-night .simcity-actions {
+    background: rgba(20,30,64,0.88);
+    border-top: 1px solid rgba(120,140,200,0.22);
+}
+.simcity-root.sc-night .simcity-btn {
+    background: rgba(42,54,96,0.94);
+    color: #dfe6ff;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+}
+.simcity-root.sc-night .simcity-btn.primary {
+    background: linear-gradient(135deg, var(--sc-primary), var(--sc-primary2));
+    color: #fff;
+}
+
+/* 夜晚：角色卡 / 属性条 / 天气横幅 / 在场区 */
+.simcity-root.sc-night .simcity-char,
+.simcity-root.sc-night .simcity-stats,
+.simcity-root.sc-night .sc-present {
+    background: rgba(40,52,92,0.92);
+    border-color: rgba(120,140,200,0.2);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.28);
+}
+.simcity-root.sc-night .simcity-char .cname,
+.simcity-root.sc-night .simcity-stat .stat-v,
+.simcity-root.sc-night .sc-person .sc-name { color: #e4e9ff; }
+.simcity-root.sc-night .simcity-char .cjob,
+.simcity-root.sc-night .simcity-stat .stat-k,
+.simcity-root.sc-night .sc-person .sc-name small { color: #8a94c0; }
+.simcity-root.sc-night .simcity-weather-bar {
+    background: linear-gradient(135deg, rgba(40,52,92,0.92), rgba(52,64,104,0.92));
+    border-color: rgba(120,140,200,0.2);
+    color: #aab3d8;
+}
+.simcity-root.sc-night .simcity-weather-bar .sw-news { color: #cdbfff; }
+.simcity-root.sc-night .simcity-note { color: #7a84b0; }
+
+/* 夜晚：室内房间（深色暖调，保留灯光感） */
+.simcity-root.sc-night .simcity-room {
+    background: linear-gradient(180deg, rgba(40,34,60,0.92), rgba(34,28,52,0.86)), radial-gradient(circle at 50% 120%, rgba(255,170,90,0.12), transparent 60%);
+    box-shadow: inset 0 0 24px rgba(0,0,0,0.35), 0 3px 14px rgba(0,0,0,0.2);
+}
+.simcity-root.sc-night .simcity-room .simcity-item {
+    background: rgba(52,44,74,0.92);
+    border-color: rgba(150,120,200,0.18);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+}
+.simcity-root.sc-night .simcity-room .simcity-item .item-name { color: #e6ddf5; }
+.simcity-root.sc-night .simcity-room .simcity-item .item-desc { color: #968cb2; }
+.simcity-root.sc-night .simcity-room .simcity-env {
+    background: linear-gradient(135deg, rgba(124,77,255,0.2), rgba(255,170,90,0.1)), rgba(40,34,60,0.9);
+    border-color: rgba(150,120,200,0.25);
+}
+.simcity-root.sc-night .simcity-room .simcity-env .env-name { color: #e6ddf5; }
+.simcity-root.sc-night .simcity-room .simcity-env .env-desc { color: #a89cc0; }
+
+/* ============ 夜晚：弹窗/抽屉（与 .simcity-root 平级的兄弟节点，用 ~ 选择器） ============ */
+.simcity-root.sc-night ~ .simcity-pop { background: rgba(6,10,24,0.62); }
+
+/* 聊天抽屉 */
+.simcity-root.sc-night ~ .simcity-pop .cc-sheet {
+    background: #1d2442;
+    box-shadow: 0 -12px 44px rgba(0,0,0,0.45);
+}
+.simcity-root.sc-night ~ .simcity-pop .cc-head {
+    background: rgba(30,38,72,0.85);
+    border-bottom: 1px solid rgba(120,140,200,0.18);
+}
+.simcity-root.sc-night ~ .simcity-pop .cc-title { color: #e4e9ff; }
+.simcity-root.sc-night ~ .simcity-pop .cc-sub { color: #8a94c0; }
+.simcity-root.sc-night ~ .simcity-pop .cc-close { background: rgba(255,255,255,0.08); color: #aab3d8; }
+.simcity-root.sc-night ~ .simcity-pop .cc-bubble.theirs {
+    background: rgba(58,70,110,0.95);
+    color: #dfe6ff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+.simcity-root.sc-night ~ .simcity-pop .cc-name { color: #6a76a8; }
+.simcity-root.sc-night ~ .simcity-pop .cc-system { color: #6a76a8; }
+.simcity-root.sc-night ~ .simcity-pop .cc-inputbar {
+    background: rgba(28,36,68,0.94);
+    border-top: 1px solid rgba(120,140,200,0.18);
+}
+.simcity-root.sc-night ~ .simcity-pop #ccInput {
+    background: rgba(58,70,110,0.6);
+    color: #dfe6ff;
+}
+.simcity-root.sc-night ~ .simcity-pop #ccInput::placeholder { color: #6a76a8; }
+
+/* 角色状态侧边抽屉 */
+.simcity-root.sc-night ~ .simcity-pop .simcity-sheet {
+    background: #1b2140;
+    box-shadow: -8px 0 30px rgba(0,0,0,0.45);
+}
+.simcity-root.sc-night ~ .simcity-pop .sc-sheet-hd { border-bottom: 1px solid rgba(120,140,200,0.18); }
+.simcity-root.sc-night ~ .simcity-pop .sc-sheet-name { color: #e4e9ff; }
+.simcity-root.sc-night ~ .simcity-pop .sc-sheet-job { color: #aab3d8; }
+.simcity-root.sc-night ~ .simcity-pop .sc-sec-hd { color: #8a94c0; }
+.simcity-root.sc-night ~ .simcity-pop .sc-stat,
+.simcity-root.sc-night ~ .simcity-pop .sc-career,
+.simcity-root.sc-night ~ .simcity-pop .sc-prop {
+    background: rgba(42,54,96,0.92);
+}
+.simcity-root.sc-night ~ .simcity-pop .sc-stat span { color: #8a94c0; }
+.simcity-root.sc-night ~ .simcity-pop .sc-stat b,
+.simcity-root.sc-night ~ .simcity-pop .sc-career-hd,
+.simcity-root.sc-night ~ .simcity-pop .sc-prop { color: #e4e9ff; }
+.simcity-root.sc-night ~ .simcity-pop .sc-career-exp { color: #8a94c0; }
+.simcity-root.sc-night ~ .simcity-pop .sc-bar { background: rgba(58,70,110,0.5); }
+.simcity-root.sc-night ~ .simcity-pop .sc-career-bar { background: rgba(58,70,110,0.5); }
+.simcity-root.sc-night ~ .simcity-pop .sc-prop small { color: #8a94c0; }
+.simcity-root.sc-night ~ .simcity-pop .sc-tag { background: rgba(124,77,255,0.25); color: #cdbfff; }
+/* 改为：夜晚纪念册与抽屉深蓝协调（替代暖棕） */
+.simcity-root.sc-night ~ .simcity-pop .sc-mem {
+    background: linear-gradient(135deg, rgba(42,54,96,0.92), rgba(52,64,104,0.9));
+    border: 1px solid rgba(120,140,200,0.16);
+    color: #c6d0ec;
+}
+.simcity-root.sc-night ~ .simcity-pop .sc-empty { color: #6a76a8; }
+
+/* ============ 夜晚：抽屉遗漏项 + 在场区按钮补丁 ============ */
+/* 侧边抽屉：条形图标题（原 #555，深底看不清） */
+.simcity-root.sc-night ~ .simcity-pop .sc-bar-row span { color: #aab3d8; }
+/* 侧边抽屉：职业等级徽章（原淡紫底太浅） */
+.simcity-root.sc-night ~ .simcity-pop .sc-lv { background: rgba(124,77,255,0.3); color: #cdbfff; }
+/* 侧边抽屉：名字小字 / 小节标题小字 */
+.simcity-root.sc-night ~ .simcity-pop .sc-sheet-name small { color: #8a94c0; }
+.simcity-root.sc-night ~ .simcity-pop .sc-sec-hd small { color: #6a76a8; }
+/* 侧边抽屉：头像边框暗化 */
+.simcity-root.sc-night ~ .simcity-pop .sc-sheet-hd .avatar { border-color: rgba(124,77,255,0.35); }
+
+/* 在场区按钮（.sc-present 在 root 内部，用后代选择器而非 ~）：
+   互动按钮夜晚加深，避免紫色文字在深卡片上发虚 */
+.simcity-root.sc-night .sc-btn.enc {
+    background: rgba(124,77,255,0.28);
+    color: #cdbfff;
+}
+
+/* 可选：属性条槽底色夜晚暗化（主城/侧边抽屉进度槽） */
+.simcity-root.sc-night .simcity-stat .stat-bar { background: rgba(58,70,110,0.5); }
+.simcity-root.sc-night ~ .simcity-pop .sc-bar { background: rgba(58,70,110,0.5); }
+
+/* ============ 弹窗/抽屉与 root 平级，继承不到 root 变量 → 在 pop 作用域重新定义（白天/夜晚通用） ============ */
+.simcity-pop {
+    --sc-primary: #7c4dff;
+    --sc-primary2: #9c6bff;
+    --sc-blue: #0b93f6;
+    --sc-orange: #ff9800;
+    --sc-green: #2e7d32;
+    --sc-card: rgba(255,255,255,0.9);
+    --sc-shadow: 0 2px 12px rgba(80,60,160,0.08);
+}
+
+/* 弹窗内 primary 按钮：pop 是 root 的兄弟，继承不到 root 的 CSS 变量，写死主题色（白天/夜晚通用） */
+.simcity-pop .simcity-btn.primary {
+    background: linear-gradient(135deg, #7c4dff, #9c6bff);
+    color: #fff;
+    box-shadow: 0 4px 14px rgba(124,77,255,0.35);
+}
+
+/* 兑换码输入框：夜晚抽屉深蓝主题适配 */
+.simcity-root.sc-night ~ .simcity-pop #redeemInput {
+    background: rgba(58,70,110,0.6);
+    color: #dfe6ff;
+    border-color: rgba(120,140,200,0.2);
+}
+.simcity-root.sc-night ~ .simcity-pop #redeemInput::placeholder { color: #6a76a8; }
+.simcity-root.sc-night ~ .simcity-pop #redeemBtn {
+    background: rgba(124,77,255,0.3);
+    color: #cdbfff;
+}

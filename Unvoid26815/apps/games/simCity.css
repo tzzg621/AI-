@@ -591,3 +591,9 @@
     background: rgba(124,77,255,0.3);
     color: #cdbfff;
 }
+
+/* ============ 夜晚：内嵌文游适配（room 深底时 #4a3f6b 看不清） ============ */
+.simcity-root.sc-night .sc-adv-page { color: #e4e9ff; }                    /* 正文：深蓝底亮字 */
+.simcity-root.sc-night .sc-adv-old .sc-adv-page { color: #aab3d8; }        /* 历史轮次：提亮 */
+.simcity-root.sc-night .sc-adv #scAdvInput { background: rgba(58,70,110,0.6); color: #dfe6ff; }   /* 行动输入框 */
+.simcity-root.sc-night .sc-adv #scAdvInput::placeholder { color: #6a76a8; }

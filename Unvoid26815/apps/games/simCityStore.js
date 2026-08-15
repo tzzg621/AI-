@@ -599,3 +599,44 @@ export async function saveSimCityAdventures(registry) {
     });
 }
 
+// ---- 游戏内好感度（亲密度：按角色对一份，双向共享）----
+export async function getSimCityRelations() {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_CHATS, 'readonly');
+        const req = tx.objectStore(STORE_CHATS).get('__simcity_relations__');
+        req.onsuccess = () => resolve(req.result || { lastGainDay: '', map: {} });
+        req.onerror = () => resolve(null);
+    });
+}
+export async function saveSimCityRelations(data) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_CHATS, 'readwrite');
+        tx.objectStore(STORE_CHATS).put(data, '__simcity_relations__');
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+    });
+}
+
+// ---- 全局设置（AI对话记忆条数等；chats store 特殊键，getAllChats 天然过滤）----
+const SIMCITY_SETTINGS_KEY = '__simcity_settings__';
+
+export async function getSimCitySettings() {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_CHATS, 'readonly');
+        const req = tx.objectStore(STORE_CHATS).get(SIMCITY_SETTINGS_KEY);
+        req.onsuccess = () => resolve(req.result || { historyCount: 20 });
+        req.onerror = () => resolve(null);
+    });
+}
+export async function saveSimCitySettings(data) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_CHATS, 'readwrite');
+        tx.objectStore(STORE_CHATS).put(data, SIMCITY_SETTINGS_KEY);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+    });
+}

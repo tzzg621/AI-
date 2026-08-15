@@ -6,9 +6,10 @@ import { isArchived } from '../roleData.js';
 import { esc } from '../../store/utils.js';
 import {
     getProfile, saveProfile, saveStory, getStories, deleteStory, buildPlaceIndex, buildPlaceIndexFrom, upsertCharPlaceIndex, saveProfiles,
-    getAllProfiles, getPresentAt, chatPairKey, getChatMessages, saveChatMessage, getAllChats, deleteChatMessages, deleteTempChats,
+    getAllProfiles, getPresentAt, chatPairKey, getChatMessages, saveChatMessage, getAllChats, deleteChatMessages, deleteTempChats, getSimCityRelations, saveSimCityRelations,
     getSimCityWorld, saveSimCityWorld, getSimCityPlaceConfig, saveSimCityPlaceConfig, getPersonaTemplates, savePersonaTemplates, getSimCityEstates, saveSimCityEstates, getGroupChatMessages, getGroupRegistry, saveGroupRegistry,
-    getAdventure, saveAdventure, getAllAdventures, getSimCityAdventures, saveSimCityAdventures
+    getAdventure, saveAdventure, getAllAdventures, getSimCityAdventures, saveSimCityAdventures,
+    getSimCitySettings, saveSimCitySettings
 } from './simCityStore.js';
 import { taskManager } from '../../store/AITaskManager.js';
 import { runTextAdventure } from './textAdventure.js';
@@ -34,6 +35,8 @@ let simCityAdvCache = {};        // ★ 文游全文缓存（按 id，打开小�
 let advEndedNotice = {};      // ★ 本会话内刚结束的文游（显示只读结尾，收起后清除）
 let simCityPlaceCfg = null;   // { presets: [], placeConfigs: {} }
 let personaTemplates = null;   // ★ 角色提示词模板（内置 + 自定义，全角色共享）
+let simCityRelations = null;   // ★ 游戏内好感度（亲密度：pairKey 一份，双向共享）
+let simCitySettings = null;   // ★ 全局设置（historyCount：AI对话记忆条数）
 
 // ---- 权限清单（系统接口声明：以后加授权项只改这里）----
 const PERMISSIONS = [
@@ -147,6 +150,42 @@ function placeWbBlock(place) {
     return parts.join('；');
 }
 
+// ★ 每日好感度结算（纯内存）：同一天同一时段同地点共处 → 概率增加亲密度（与工资一致：跨天补算，lastGainDay 防同日重复）
+function settleRelationsFrom(profiles, placeIndex, relations, now = new Date()) {
+    if (!relations) return false;
+    const yesterday = dayStr(new Date(now.getTime() - 86400000));
+    if (relations.lastGainDay === yesterday) return false;
+    const co = {};   // pairKey -> 共处小时数
+    for (const placeName in (placeIndex || {})) {
+        for (const dayKey in placeIndex[placeName]) {
+            for (const hour in placeIndex[placeName][dayKey]) {
+                const ids = placeIndex[placeName][dayKey][hour];
+                if (!ids || ids.length < 2) continue;
+                for (let i = 0; i < ids.length; i++) {
+                    for (let j = i + 1; j < ids.length; j++) {
+                        const k = pairKeyOf(ids[i], ids[j]);
+                        co[k] = (co[k] || 0) + 1;
+                    }
+                }
+            }
+        }
+    }
+    let changed = false;
+    relations.map = relations.map || {};
+    for (const k in co) {
+        const r = relations.map[k] = relations.map[k] || { score: 0 };
+        let gain = 0;
+        if (co[k] >= 1 && Math.random() < 0.6) gain++;
+        if (co[k] >= 2 && Math.random() < 0.6) gain++;
+        if (gain) {
+            r.score = Math.max(0, Math.min(100, (r.score || 0) + gain));
+            changed = true;
+        }
+    }
+    relations.lastGainDay = yesterday;
+    return changed;
+}
+
 // ★ 区域 → 房产列表索引（重建：进小城 / 买房后）
 async function buildPropertyAreaIndex() {
     const profiles = await getAllProfiles();
@@ -252,9 +291,12 @@ export async function start(container, globalState, onBack) {
     await ensurePersonaTemplates();   // ★ 角色模板
     await ensureSimCityWorld();   // ★ 确保当天天气/见闻（跨天自动刷新）
     await loadEstates();
+    simCityRelations = await getSimCityRelations().catch(() => null);
+    simCitySettings = await getSimCitySettings().catch(() => null);
     await loadAdventures();   // ★ 文游注册表 + 全文缓存
     // ★ 地产建设进度结算（纯内存）：所在地=地产名的共建者每小时 +20
     if (settleEstateProgressFrom(simCityEstates.estates || [], placeIndex)) await saveEstates();
+    if (simCityRelations && settleRelationsFrom(allProfiles, placeIndex, simCityRelations)) await saveSimCityRelations(simCityRelations).catch(() => { });
     await cleanupStaleTempChats();
     const back = () => { simCityCtx = null; onBack && onBack(); };
     const profile = await getProfile(roleId);
@@ -410,7 +452,8 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '', fandomBoost =
         base.style ? `说话风格：${base.style}` : '',
         base.secret ? `内心秘密：${base.secret}` : '',
         base.detail ? `详细设定：${base.detail}` : '',
-        `小城职业：${profile.job}`
+        `小城职业：${profile.job}`,
+        personaBlockFor(profile) ? `个性登记：${personaBlockFor(profile)}` : ''   // ★ 手写世界书+模板，评估官参考
     ].filter(Boolean).join('\n');
     // ★ 动态地点注入：已有 ip → 按可见性过滤（只注入该角色能看见的）；首次评估（无 ip）→ 按开关全量
     const builtEstates = (simCityEstates?.estates || []).filter(e => e.status === 'built');
@@ -1068,6 +1111,39 @@ async function getJobCounts() {
     return counts;
 }
 
+// ============ 游戏内好感度（亲密度 + 修正） ============
+function pairKeyOf(a, b) { return [a, b].sort().join('_'); }
+function getIntimacy(a, b) { return simCityRelations?.map?.[pairKeyOf(a, b)]?.score || 0; }
+function getRelationMod(profile, targetId) { return (profile?.relationMods || {})[targetId] || 0; }
+function getEffectiveRelation(profile, targetId) {
+    return Math.max(0, Math.min(100, getIntimacy(profile.id, targetId) + getRelationMod(profile, targetId)));
+}
+function starOf(score) {
+    if (score >= 81) return '★★★★★';
+    if (score >= 61) return '★★★★';
+    if (score >= 41) return '★★★';
+    if (score >= 21) return '★★';
+    if (score >= 5) return '★';
+    return '';
+}
+function relationLayerOf(score) {
+    if (score >= 81) return '挚友'; if (score >= 61) return '亲友'; if (score >= 41) return '密友';
+    if (score >= 21) return '朋友'; if (score >= 5) return '熟人'; return '无感';
+}
+// ★ 注入块："你们的游戏亲密度是X（★密友），你对ta的好感度修正是+10"
+function relationBlockFor(profile, targetId, targetName) {
+    if (!profile || !targetId || targetId === profile.id) return '';
+    const inti = getIntimacy(profile.id, targetId);
+    const mod = getRelationMod(profile, targetId);
+    if (!inti && !mod) return '';   // ★ 无任何好感数据：不注入（省 token）
+    const star = starOf(inti);
+    const parts = [`你们的游戏亲密度是${inti}${star ? `（${star}${relationLayerOf(inti)}）` : ''}`];
+    if (mod) parts.push(`你对${targetName || 'ta'}的好感度修正是${mod > 0 ? '+' : ''}${mod}`);
+    let out = parts.join('，');
+    if (mod) out += `（你实际感觉 ${getEffectiveRelation(profile, targetId)}）`;
+    return out;
+}
+
 // 日期工具（本地日期）
 function dayStr(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function daysBetween(from, to) {
@@ -1638,6 +1714,8 @@ async function buildAdvContext(place, hour, participants, roleId, isSecond) {
         if (full) {
             const comment = pr.aiProfile?.comment;
             if (comment && comment !== '（评估生成失败）') parts.push(`设定：${comment}`);
+            const persona = personaBlockFor(pr);   // ★ 个性登记（世界书+模板）
+            if (persona) parts.push(`个性：${persona}`);
             const sch = (pr.schedule || pr.aiProfile?.schedule || []);
             if (sch.length) parts.push(`日程：${sch.map(s => `${s.time} ${s.place}${s.act ? ' ' + s.act : ''}`).join('；')}`);
         }
@@ -1704,7 +1782,7 @@ async function advanceAdventure(container, placeKey, advId, roleId, profile, act
         if (isSecond) {
             systemPrompt = (presetBlock ? `【系统预设】${presetBlock}\n` : '')
                 + '你是"模拟小城"的文游叙事引擎（第二人称沉浸模式）。每轮只输出 JSON：'
-                + '{"scene":"正文·沉浸式文游体验（用"你"称呼主视角玩家，其他角色一律用名字，1000~4000字，有画面感）",'
+                + '{"scene":"正文·沉浸式文游体验（用"你"称呼主视角玩家，其他角色一律用名字，1000~2000字，有画面感）",'
                 + '"summary":"概要·第三人称剧情总结（所有角色一律用名字，200~300字，客观概括本轮进展，不出现"你"）",'
                 + '"ended":false,"ending":"ended时的收尾（2000字内）"}。'
                 + '关键：正文 scene 必须用"你"指代主视角玩家、严禁用其名字；概要 summary 必须纯第三人称。'
@@ -1716,11 +1794,11 @@ async function advanceAdventure(container, placeKey, advId, roleId, profile, act
         } else {
             systemPrompt = (presetBlock ? `【系统预设】${presetBlock}\n` : '')
                 + '你是"模拟小城"的文游叙事引擎（第三人称模式）。本模式不存在"你"，所有角色一律用名字描述。每轮只输出 JSON：'
-                + '{"scene":"正文·第三人称推进（所有角色用名字，80~150字，有画面感）",'
-                + '"summary":"概要·第三人称剧情总结（所有角色用名字，30~50字）",'
-                + '"ended":false,"ending":"ended时的收尾（50字内）"}。'
+                + '{"scene":"正文·第三人称推进（所有角色用名字，1000~2000字，有画面感）",'
+                + '"summary":"概要·第三人称剧情总结（所有角色用名字，200~300字）",'
+                + '"ended":false,"ending":"ended时的收尾（2000字内）"}。'
                 + '角色真实度：每个在场角色都有独立性格与相互间的关系，须按各角色自身逻辑行动、保持真实，不得为迎合主视角而扭曲角色；'
-                + '语境：主动利用【今日小城】的事件/天气与【角色关系】推动剧情。'
+                + '语境：结合当前地点和在场人物，剧情陷入僵持时，主动利用【今日小城】的事件与【角色关系】制造话题。'
                 + '只输出 JSON 本身。';
             userContent = (placeWbBlock ? `【地点专属】${placeWbBlock}\n\n` : '')
                 + `${envBlock}\n\n【在场角色】\n${castBlock}\n【在场未参与】${bystanderBlock}\n【角色关系】${relationBlock}\n\n${historyBlock}\n\n行动：${action}\n请推进正文。`;
@@ -1745,9 +1823,9 @@ async function advanceAdventure(container, placeKey, advId, roleId, profile, act
         }
         // ★ 在场同步（动态退出）
         syncAdvPresence(place.name, hour, rec, adv, roleId);
-        // 结束：AI 收尾 / 轮数满 5 / 参与者归零
+        // 结束：AI 收尾 / 轮数满 200 / 参与者归零
         let justEnded = false;
-        if (res.ended || rec.rounds >= 5 || !(rec.participants || []).length) {
+        if (res.ended || rec.rounds >= 200 || !(rec.participants || []).length) {
             rec.status = 'ended';
             justEnded = true;
             if (res.ending) adv.turns.push({ actor: null, action: null, scene: `—— ${res.ending}`, summary: '', ts: Date.now() });
@@ -2371,7 +2449,7 @@ function renderHall(container, globalState, onBack, roleId, profile) {
         container.appendChild(overlay);
         overlay.querySelector('#jobListClose').addEventListener('click', () => overlay.remove());
     });
-    
+
     container.querySelector('#hallEstateList').addEventListener('click', async () => {
         const myJob = profile.jobKey && getJob(profile.jobKey);
         if (!myJob || !myJob.hallStaff) { toast('🔒 仅限市政厅工作人员查看', '#999'); return; }
@@ -2646,6 +2724,8 @@ function openPersonaRegistry(container, roleId, profile) {
                 }
             }
             if (writes.length) await saveProfiles(writes);
+            personaTemplates = personaTemplates.filter(t => t.id !== tid);   // ★ 内存移除
+            await savePersonaTemplates(personaTemplates);                     // ★ 落库
             toast('✅ 模板已删除', '#e53935');
             overlay.remove();
         });
@@ -3457,7 +3537,9 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
             : gfList.map(f => `
                         <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f5f5f5;">
                             <div style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0;">${getAvatarHtml(f.id)}</div>
-                            <div style="flex:1;font-size:14px;">${esc(f.name)}${f.isContact ? ` <span style="font-size:12px;color:#999;">（${esc(realName(f.id))}）</span>` : ''}${(() => {
+                            <div style="flex:1;font-size:14px;">${esc(f.name)}
+                            ${(() => { const s = starOf(getIntimacy(roleId, f.id)); return s ? ` <span style="font-size:11px;color:#ff9800;">${s}</span>` : ''; })()}
+                            ${f.isContact ? ` <span style="font-size:12px;color:#999;">（${esc(realName(f.id))}）</span>` : ''}${(() => {
                     const st = statusNow(f.id, new Date().getHours());
                     return st ? `<span style="font-size:11px;color:#bbb;font-weight:400;">（${st}）</span>` : '';
                 })()}</div>
@@ -3541,7 +3623,7 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
-// 授权只读
+// 授权 + 全局设定（只读授权 + AI对话记忆条数）
 function showPermView(container) {
     const overlay = document.createElement('div');
     overlay.className = 'simcity-pop';
@@ -3555,11 +3637,29 @@ function showPermView(container) {
                         <span style="color:#2e7d32;font-size:12px;">✓ 已授权</span>
                     </div>`).join('')}
             </div>
-            <div style="font-size:11px;color:#999;margin-top:10px;">系统接口，暂不可在游戏内修改</div>
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid #f5f5f5;">
+                <div style="font-size:12px;color:#999;margin-bottom:6px;">🧠 AI对话记忆（全局：AI聊天时携带的最近消息条数）</div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <input type="range" id="permHistoryCount" min="5" max="100" step="5" value="${simCitySettings?.historyCount || 20}" style="flex:1;accent-color:#7c4dff;">
+                    <span id="permHistoryVal" style="font-size:13px;font-weight:600;color:#7c4dff;min-width:34px;text-align:center;">${simCitySettings?.historyCount || 20}</span>
+                </div>
+                <div style="font-size:11px;color:#bbb;margin-top:4px;">条数越多，AI 越了解你们的过往，token 消耗越大</div>
+            </div>
+            <div style="font-size:11px;color:#999;margin-top:10px;">授权为系统接口，暂不可在游戏内修改</div>
             <button class="simcity-pop-close" id="permClose">关闭</button>
         </div>`;
     container.appendChild(overlay);
     overlay.querySelector('#permClose').addEventListener('click', () => overlay.remove());
+    // ★ AI对话记忆条数：拖动即存（change 松手时保存，避免频繁写库）
+    const hSlider = overlay.querySelector('#permHistoryCount');
+    const hVal = overlay.querySelector('#permHistoryVal');
+    hSlider.addEventListener('input', () => { hVal.textContent = hSlider.value; });
+    hSlider.addEventListener('change', async () => {
+        const hc = parseInt(hSlider.value, 10) || 20;
+        simCitySettings = { historyCount: hc };   // ★ 内存同步（本会话立即生效）
+        await saveSimCitySettings({ historyCount: hc }).catch(() => { });
+        toast(`🧠 AI对话记忆已设为 ${hc} 条`);
+    });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
@@ -4370,6 +4470,27 @@ async function applyCityActions(aiMsgs, roleId, profile, participants) {
             done.push(`🤝 ${speakerName} 和 ${tName} 已互为游戏好友`);
         }
 
+        // ③ 好感修正：说话人 → 目标（默认主视角；可 @游戏名 指定任意在场者），单向写各自档案（-200~200）
+        const rm = t.match(/【好感\s*([+-]?\d{1,3})\s*(?:[@：:]\s*([^】\s]{1,8}))?】/);
+        if (rm) {
+            const delta = Math.max(-200, Math.min(200, parseInt(rm[1], 10) || 0));
+            if (!delta) continue;
+            const targetName = (rm[2] || '').trim();
+            let targetId = roleId;
+            if (targetName) {
+                const found = participants.find(pid => pid !== speakerId && charName(pid) === targetName);
+                if (!found) continue;
+                targetId = found;
+            }
+            if (targetId === speakerId) continue;
+            const sp = await getProfile(speakerId);
+            if (!sp) continue;
+            sp.relationMods = sp.relationMods || {};
+            sp.relationMods[targetId] = Math.max(-200, Math.min(200, (sp.relationMods[targetId] || 0) + delta));
+            await saveProfile(sp, speakerId);
+            done.push(`💗 ${speakerName} 对 ${charName(targetId)} 好感修正 ${delta > 0 ? '+' : ''}${delta}`);
+        }
+
         // ② 约定（临时 / 永久）→ 写说话人自己的档案
         const m = t.match(/【约定】(\d{1,2})[:：](\d{0,2})(?:[，, ]+(.{2,8}))?/);
         if (m) {
@@ -4632,8 +4753,12 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
 
     // ★ 读历史：持久读非 temp；临时读 temp + 生命周期检查
     let messages;
+    let tempMsgs = [];       // ★ 偶遇记忆（持久对话的记忆来源：所有地点临时对话）
+    let persistMsgs = [];    // ★ 好友框记忆（临时对话的记忆来源：持久聊天）
     if (persist) {
-        messages = (await getChatMessages(pairKey)).filter(m => !m.temp);
+        const all = await getChatMessages(pairKey);
+        messages = all.filter(m => !m.temp);
+        tempMsgs = all.filter(m => m.temp);
     } else if (gcId) {
         // ★ 共享群聊窗口：读群聊自己的历史（历史由 cleanup 统一管，打开时不删）
         messages = await getGroupChatMessages(gcId);
@@ -4643,7 +4768,9 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
             gcId = null;
         }
     } else {
-        const temp = (await getChatMessages(pairKey)).filter(m => m.temp);
+        const all = await getChatMessages(pairKey);
+        const temp = all.filter(m => m.temp);
+        persistMsgs = all.filter(m => !m.temp);   // ★ 临时对话的记忆 = 好友框持久聊天（游戏内记忆互通）
         const currentPlace = getCharCurrentPlace(placeIndex, friendId, hour);
         const dialogPlace = temp[0]?.place;
         if (dialogPlace && currentPlace !== dialogPlace) {
@@ -4698,7 +4825,7 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
         overlay,
         reload: async () => {
             if (!overlay.isConnected) return;      // 窗口又关了 → 跳过（数据已保存）
-            if (persist) messages = (await getChatMessages(pairKey)).filter(m => !m.temp);
+            if (persist) { const all = await getChatMessages(pairKey); messages = all.filter(m => !m.temp); tempMsgs = all.filter(m => m.temp); }
             else if (gcId) messages = await getGroupChatMessages(gcId);
             else messages = (await getChatMessages(pairKey)).filter(m => m.temp && m.place === placeName);
             renderMsgs(messages.length);
@@ -4894,7 +5021,7 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
             const nowStatus = stSmall ? stSmall.textContent.replace(/[（）()]/g, '').trim() : (statusNow(friendId, hour) || '');
             const friendCustom = customDesc(fp || {});   // ★ 对方角色自己的特殊属性（AI 扮演对方，角色看自己最全）
 
-            const history = messages.slice(-20).map(m => {
+            const history = messages.slice(-(simCitySettings?.historyCount || 20)).map(m => {
                 if (m.system || m.from === 'system') return `【系统】${m.text}`;
                 return `${m.from === roleId ? promptMyName : charName(m.from)}：${m.text}`;
             }).join('\n');
@@ -4936,6 +5063,8 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                 if (selfSched) line += `\n  今日日程：${selfSched}`;
                 const selfCustom = customDesc(pf);
                 if (selfCustom) line += `\n  特殊属性：${esc(selfCustom)}`;
+                const persona = personaBlockFor(pf);   // ★ 个性登记
+                if (persona) line += `\n  个性：${persona}`;
                 if (pf) {
                     // ★ 该角色视角：看主视角（从TA自己的档案）
                     const pidContactA = new CharacterStore(pid).isFriend(roleId);
@@ -4958,6 +5087,15 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                     const ownFriends = pfGf.filter(f => participants.includes(f.id) && f.id !== roleId && f.id !== pid).map(f => charName(f.id));
                     if (ownFriends.length) line += `\n  游戏好友：${ownFriends.join('、')}`;
                 }
+                // ★ 游戏内好感：该角色对在场其他人的亲密度/修正
+                const rels = participants.filter(q => q !== pid).map(q => {
+                    const inti = getIntimacy(pid, q);
+                    const star = starOf(inti);
+                    const mod = getRelationMod(pf, q);
+                    return `${charName(q)}：${inti}${star}${mod ? `（修正${mod > 0 ? '+' : ''}${mod}）` : ''}`;
+                }).join('；');
+                if (rels) line += `\n  游戏好感：${rels}`;
+
                 rosterLines.push(line);
             }
             const rosterText = rosterLines.join('\n');
@@ -5004,12 +5142,17 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                     userContent: `${simCityWorldText() ? '【今日小城】\n' + simCityWorldText() + '\n\n' : ''}${myInfo}\n\n` +
                         (isGroupChat()
                             ? `【在场者】\n${rosterText || '（只有你们两人）'}\n\n`
-                            : (fp ? `【你】小城名：${esc(fp.name)}（${esc(jobDisplay(fp))}）\n性格：${esc((fp.aiProfile?.traits || []).join('、'))}\n真实身份：${esc(getCharacterNameById(friendId) || '')}\n你的当前状态：${nowStatus || '空闲'}\n今日日程：${(fp.schedule || []).map(s => `${esc(s.time)} ${esc(s.place)}${s.act ? ' ' + esc(s.act) : ''}`).join('；') || '（暂无安排）'}${friendCustom ? `\n特殊属性：${esc(friendCustom)}` : ''}\n` : `【你】${esc(friendName)}\n（未入住小城，作为路人回应）\n`)) +
+                            : (fp ? `【你】小城名：${esc(fp.name)}（${esc(jobDisplay(fp))}）\n性格：${esc((fp.aiProfile?.traits || []).join('、'))}\n真实身份：${esc(getCharacterNameById(friendId) || '')}\n你的当前状态：${nowStatus || '空闲'}\n今日日程：${(fp.schedule || []).map(s => `${esc(s.time)} ${esc(s.place)}${s.act ? ' ' + esc(s.act) : ''}`).join('；') || '（暂无安排）'}${friendCustom ? `\n特殊属性：${esc(friendCustom)}` : ''}${personaBlockFor(fp) ? `\n个性：${personaBlockFor(fp)}` : ''}${(() => { const rb = relationBlockFor(fp, roleId, promptMyName); return rb ? `\n【好感】${rb}` : ''; })()}\n` : `【你】${esc(friendName)}\n（未入住小城，作为路人回应）\n`)) +
                         (isRemote
                             ? `【此刻】${hour}点 · 远程消息：你正拿着手机回${promptMyName}的消息${nowStatus ? '（你此刻' + nowStatus + '）' : ''}\n\n`
                             : `此刻：${placeName}（${hour}点），${sceneEnv}。` +
                             (isGroupChat ? `${charName(friendId)}正在「${friendAct || ('在' + placeName + '待着')}」` : `你正在「${friendAct || ('在' + placeName + '待着')}」`) + `\n\n`) +
                         `【对话历史】\n${history || '（刚开始聊）'}\n\n` +
+                        `${(() => {
+                            const mem = persist ? tempMsgs : (gcId ? [] : persistMsgs);   // ★ 持久对话带临时记忆；临时对话带好友框记忆；群聊不带
+                            if (!mem.length) return '';
+                            return `【近期记忆】（你记得的：你们在其他场合聊过的内容，可自然提及）\n${mem.filter(m => m.from && m.from !== 'system').slice(-6).map(m => `（${m.place || '聊天'}）${charName(m.from)}：${stripEventMarkers(m.text || '')}`).join('\n')}\n\n`;
+                        })()}` +
                         `请以${groupMode ? '在场者的身份' : '你的身份'}回复${promptMyName}最近这句话：「${text}」`,
                     maxTokens: isGroupChat() ? 1400 : 800, temperature: 0.85
                 });

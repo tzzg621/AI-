@@ -6,8 +6,8 @@ import { isArchived } from '../roleData.js';
 import { esc } from '../../store/utils.js';
 import {
     getProfile, saveProfile, saveStory, getStories, deleteStory, buildPlaceIndex, buildPlaceIndexFrom, upsertCharPlaceIndex, saveProfiles,
-    getAllProfiles, getPresentAt, chatPairKey, getChatMessages, saveChatMessage, getAllChats, deleteChatMessages, deleteTempChats,
-    getSimCityWorld, saveSimCityWorld, getSimCityEstates, saveSimCityEstates, getGroupChatMessages, getGroupRegistry, saveGroupRegistry,
+    getAllProfiles, getPresentAt, chatPairKey, getChatMessages, saveChatMessage, getAllChats, deleteChatMessages, deleteTempChats, getSimCityRelations, saveSimCityRelations,
+    getSimCityWorld, saveSimCityWorld, getSimCityPlaceConfig, saveSimCityPlaceConfig, getPersonaTemplates, savePersonaTemplates, getSimCityEstates, saveSimCityEstates, getGroupChatMessages, getGroupRegistry, saveGroupRegistry,
     getAdventure, saveAdventure, getAllAdventures, getSimCityAdventures, saveSimCityAdventures
 } from './simCityStore.js';
 import { taskManager } from '../../store/AITaskManager.js';
@@ -28,9 +28,13 @@ let pendingTargets = [];   // [{ estateId, goal, submittedAt }]
 // ★ 当前活跃聊天窗口的"自动重开"能力（开新窗口覆盖；仅 AI 完成且重开过时使用）
 let activeChatRefresh = null;
 let drawerOpenAt = null;   // ★ 当前打开的抽屉所属地点（{ key }）——重渲染后恢复，支持"按钮不自动关"
+let renderSeq = 0;   // ★ 渲染序号（防竞态：后发覆盖先发）
 let simCityAdvRegistry = null;   // ★ 文游注册表缓存（轻量索引）
 let simCityAdvCache = {};        // ★ 文游全文缓存（按 id，打开小城时加载）
 let advEndedNotice = {};      // ★ 本会话内刚结束的文游（显示只读结尾，收起后清除）
+let simCityPlaceCfg = null;   // { presets: [], placeConfigs: {} }
+let personaTemplates = null;   // ★ 角色提示词模板（内置 + 自定义，全角色共享）
+let simCityRelations = null;   // ★ 游戏内好感度（亲密度：pairKey 一份，双向共享）
 
 // ---- 权限清单（系统接口声明：以后加授权项只改这里）----
 const PERMISSIONS = [
@@ -58,6 +62,126 @@ function toast(msg, bg = '#333') {
 function getContactIds(roleId) {
     try { return new CharacterStore(roleId).getFriendIds().filter(id => !isArchived(id)); }
     catch { return []; }
+}
+
+// ★ 个性登记内置世界书模板（各角色可勾选复用）
+const PERSONA_TEMPLATES = [
+    { id: 'tpl_gentle', name: '性格·温柔体贴', text: '待人温柔体贴，说话轻声细语，心思细腻，习惯照顾身边的人。' },
+    { id: 'tpl_tsundere', name: '性格·傲娇', text: '表面傲娇、口是心非，其实很在意身边的人，偶尔不经意流露关心。' },
+    { id: 'tpl_cheerful', name: '性格·元气开朗', text: '性格开朗活泼，元气满满，爱笑爱闹，是人群里的气氛担当。' },
+    { id: 'tpl_money', name: '世界观·金钱至上', text: '坚信金钱万能，做事先看利益与回报。' },
+    { id: 'tpl_diligent', name: '世界观·努力至上', text: '相信努力就有回报，讨厌不劳而获、投机取巧。' },
+    { id: 'tpl_note_name', name: '注意·别叫全名', text: '不喜欢被叫全名，被叫全名会明显不悦。' },
+];
+
+// ★ 角色模板（独立特殊键，首次进游戏初始化内置默认）
+async function ensurePersonaTemplates() {
+    let tpls = await getPersonaTemplates().catch(() => null);
+    if (!tpls) {
+        tpls = [...PERSONA_TEMPLATES];   // 首次：内置默认
+        await savePersonaTemplates(tpls).catch(() => { });
+    }
+    personaTemplates = tpls;
+    return tpls;
+}
+// ★ 拼接角色专属提示词：复用模板（personaTemplateIds）+ 专有世界书（worldbook）
+function personaBlockFor(profile) {
+    const pr = profile || {};
+    const allTpl = personaTemplates || [];
+    const tplTexts = (pr.personaTemplateIds || []).map(tid => {
+        const t = allTpl.find(x => x.id === tid);
+        return t ? t.text : '';
+    }).filter(Boolean);
+    const parts = [...tplTexts, (pr.worldbook || '').trim()].filter(Boolean);
+    return parts.join('；');
+}
+
+// ★ 系统级预设（场景设定用，全局复用，可自定义；首次进游戏初始化进世界键）
+const DEFAULT_PRESETS = [
+    { id: 'preset_ai', name: 'AI拟人世界观', text: '这是一个AI拟人的世界，所有居民都是AI，彼此以人类方式生活。' },
+    { id: 'preset_friend', name: '交友游戏', text: '这是一个需要不断与陌生人交友的游戏，社交是核心玩法。' },
+];
+
+// ★ 地点提示词配置（独立特殊键，与每天刷新的世界状态解耦）
+async function ensurePlaceConfig() {
+    let cfg = await getSimCityPlaceConfig().catch(() => null);
+    if (!cfg) {
+        cfg = { presets: [...DEFAULT_PRESETS], placeConfigs: {} };
+        await saveSimCityPlaceConfig(cfg).catch(() => { });
+    }
+    simCityPlaceCfg = cfg;
+    return cfg;
+}
+
+// ★ 地点专属世界书：自定义覆盖 > 内置默认（内置默认未来可由 AI 生成地点时输出）
+function placeWorldbookOf(place) {
+    if (!place) return '';
+    const cfg = simCityPlaceCfg?.placeConfigs?.[place.key];
+    return (cfg?.worldbook) || place.worldbook || '';
+}
+
+// ★ 系统级预设（加到 systemPrompt 最前方，描述/改变全局氛围与规则）
+function placePresetBlock(place) {
+    const cfg = simCityPlaceCfg?.placeConfigs?.[place?.key] || {};
+    const presets = simCityPlaceCfg?.presets || [];
+    return (cfg.presetIds || []).map(pid => presets.find(x => x.id === pid)?.text).filter(Boolean).join('；');
+}
+
+// ★ 地区专属世界书 + 父子地点世界书（加到 userContent 最前方）
+function placeWbBlock(place) {
+    const p = place || {};
+    const cfg = simCityPlaceCfg?.placeConfigs?.[p.key] || {};
+    const parts = [];
+    const wb = placeWorldbookOf(p);
+    if (wb) parts.push(wb);
+    if (cfg.includeParent && p.parent) {
+        const parent = findPlace(p.parent);
+        const pw = placeWorldbookOf(parent);
+        if (pw) parts.push(`【周边·${parent?.name || ''}】${pw}`);
+    }
+    if (cfg.includeChildren) {
+        childrenOf(p.key).forEach(c => {
+            const cw = placeWorldbookOf(c);
+            if (cw) parts.push(`【周边·${c.name}】${cw}`);
+        });
+    }
+    return parts.join('；');
+}
+
+// ★ 每日好感度结算（纯内存）：同一天同一时段同地点共处 → 概率增加亲密度（与工资一致：跨天补算，lastGainDay 防同日重复）
+function settleRelationsFrom(profiles, placeIndex, relations, now = new Date()) {
+    if (!relations) return false;
+    const yesterday = dayStr(new Date(now.getTime() - 86400000));
+    if (relations.lastGainDay === yesterday) return false;
+    const co = {};   // pairKey -> 共处小时数
+    for (const placeName in (placeIndex || {})) {
+        for (const dayKey in placeIndex[placeName]) {
+            for (const hour in placeIndex[placeName][dayKey]) {
+                const ids = placeIndex[placeName][dayKey][hour];
+                if (!ids || ids.length < 2) continue;
+                for (let i = 0; i < ids.length; i++) {
+                    for (let j = i + 1; j < ids.length; j++) {
+                        const k = pairKeyOf(ids[i], ids[j]);
+                        co[k] = (co[k] || 0) + 1;
+                    }
+                }
+            }
+        }
+    }
+    let changed = false;
+    relations.map = relations.map || {};
+    for (const k in co) {
+        const r = relations.map[k] = relations.map[k] || { score: 0 };
+        let gain = 0;
+        if (co[k] >= 1 && Math.random() < 0.6) gain++;
+        if (co[k] >= 2 && Math.random() < 0.6) gain++;
+        if (gain) {
+            r.score = Math.max(0, Math.min(100, (r.score || 0) + gain));
+            changed = true;
+        }
+    }
+    relations.lastGainDay = yesterday;
+    return changed;
 }
 
 // ★ 区域 → 房产列表索引（重建：进小城 / 买房后）
@@ -161,12 +285,15 @@ export async function start(container, globalState, onBack) {
     for (const p of writes) { if (seen.has(p.id)) continue; seen.add(p.id); finalWrites.push(p); }
     if (finalWrites.length) await saveProfiles(finalWrites.map(p => ({ profile: p, roleId: p.id })));
     if (mainGain > 0) toast(`💼 工资到账 +${mainGain} 金币（含底薪与工时）`, '#2e7d32');
-
+    await ensurePlaceConfig();
+    await ensurePersonaTemplates();   // ★ 角色模板
     await ensureSimCityWorld();   // ★ 确保当天天气/见闻（跨天自动刷新）
     await loadEstates();
+    simCityRelations = await getSimCityRelations().catch(() => null);
     await loadAdventures();   // ★ 文游注册表 + 全文缓存
     // ★ 地产建设进度结算（纯内存）：所在地=地产名的共建者每小时 +20
     if (settleEstateProgressFrom(simCityEstates.estates || [], placeIndex)) await saveEstates();
+    if (simCityRelations && settleRelationsFrom(allProfiles, placeIndex, simCityRelations)) await saveSimCityRelations(simCityRelations).catch(() => { });
     await cleanupStaleTempChats();
     const back = () => { simCityCtx = null; onBack && onBack(); };
     const profile = await getProfile(roleId);
@@ -277,9 +404,9 @@ function renderRegister(container, globalState, onBack, roleId) {
 // ============================================================
 
 // 后台提交评估任务：完成 → 写设定 + 纪念册只存评语 + 判断是否弹窗
-function startAiEvaluation(roleId, profile, suggestion = '') {
+function startAiEvaluation(roleId, profile, suggestion = '', fandomBoost = false) {
     try {
-        taskManager.submit('city_eval', `✨ AI评估：${profile.name} 的小城人设与日程`, () => aiEvaluateProfile(roleId, profile, suggestion), {
+        taskManager.submit('city_eval', `✨ AI评估：${profile.name} 的小城人设与日程`, () => aiEvaluateProfile(roleId, profile, suggestion, fandomBoost), {
             onComplete: (ai) => {
                 addMemento(roleId, profile, {                    // 纪念册：评语 + 标签
                     type: 'ai_report',
@@ -302,7 +429,7 @@ function startAiEvaluation(roleId, profile, suggestion = '') {
 }
 
 // 调 AI：读取角色设定 → 生成优化人设 + 日程表（JSON），并自动写入 profile.aiProfile
-async function aiEvaluateProfile(roleId, profile, suggestion = '') {
+async function aiEvaluateProfile(roleId, profile, suggestion = '', fandomBoost = false) {
     const base = (await readGameData(roleId, 'identity', () => {
         try {
             const f = JSON.parse(localStorage.getItem('rolebook_characters') || '[]').find(c => c.id === roleId);
@@ -322,11 +449,12 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '') {
         base.style ? `说话风格：${base.style}` : '',
         base.secret ? `内心秘密：${base.secret}` : '',
         base.detail ? `详细设定：${base.detail}` : '',
-        `小城职业：${profile.job}`
+        `小城职业：${profile.job}`,
+        personaBlockFor(profile) ? `个性登记：${personaBlockFor(profile)}` : ''   // ★ 手写世界书+模板，评估官参考
     ].filter(Boolean).join('\n');
     // ★ 动态地点注入：已有 ip → 按可见性过滤（只注入该角色能看见的）；首次评估（无 ip）→ 按开关全量
     const builtEstates = (simCityEstates?.estates || []).filter(e => e.status === 'built');
-    const fandomOn = !!profile.enhanceFandom;
+    const fandomOn = !!profile.enhanceFandom || !!fandomBoost;   // ★ 临时同人增强：仅本次评估生效，不写档案
     const hasIp = !!(profile.ip && profile.ip.length);
     const dynamicEstates = builtEstates.filter(e => hasIp ? canSeeEstate(roleId, profile, e) : fandomOn);    // 纯名清单（供 schedule 兜底过滤）
     // 纯名清单（供 schedule 兜底过滤）
@@ -471,7 +599,7 @@ async function assessEstateGoal(roleId, profile, goal, estateList) {
         '只输出JSON：{"action":"new|merge|reject","targetId":"已有地产id(merge时)","maxProgress":1000,"ip":["目标所属作品标签"],"tags":["目标标签"],"name":"目标最终名(如冬木市)","reason":"reject时理由","buildTime":"19:00-21:00","buildAct":"参与冬木市建设","comment":"评估官评语"}，不要任何其他文字。';
     const userContent =
         `当前角色：${esc(profile.name)}（${esc((profile.ip || []).join('、')) || '无标签'}）。\n` +
-        `已有地产：${JSON.stringify((estateList || []).map(e => ({ id: e.id, goal: e.goal, status: e.status, contributors: e.contributors })))}。\n` +
+        `已有地产：${JSON.stringify((estateList || []).filter(e => e.goal).map(e => ({ id: e.id, goal: e.goal, status: e.status })))}。\n` +
         `该角色已有建设日程时间点：${JSON.stringify((profile.builds || []).map(x => x.endTime ? `${x.time}-${x.endTime}` : x.time))}。\n` +
         `目标：${goal}`;
     const raw = await callAIWithMessages({ systemPrompt, userContent, maxTokens: 12000, temperature: 0.8 });
@@ -683,21 +811,32 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
     try {
         const verdict = await taskManager.submit('city_eval', `🏗️ ${estate.goal} 焕新评估`, async () => {
             const { callAIWithMessages } = await import('../aiService.js');
+            // ★ 当前小城角色名单（供 events 的 roles/tags 引用，让事件与角色绑定）
+            const profiles = await getAllProfiles();
+            const rosterTxt = profiles.map(p => `${p.name}${(p.tags || []).length ? '(' + p.tags.join('/') + ')' : ''}`).join('、');
+
             const systemPrompt =
                 '你是"模拟小城"的建设评估官，负责将一座建设完成的私人地产焕新为正式特别场景。' +
                 '根据地产的目标与规模，生成建成形态：' +
                 '1) name：最终场景名正常情况下为目标名。' +
                 '2) tags：场景标签数组（世界观、特色，如["fate","圣杯战争"]）。' +
                 '3) desc：一段独立的环境描述语（氛围、风貌，60字内）。' +
-                '4) subs：相关子地点数组，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么）、desc（简述），2~4个。' +
-                '5) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
-                '6) comment：一段给共建者的评语（庆祝建成，60字内）。' +
-                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"..."},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
+                '4) ambience：本体的分时段环境语，6个时段key：night（22-5点夜色）、dawn（5-8点清晨）、morning（8-12点上午）、noon（12-14点午后）、day（14-18点白天）、dusk（18-22点傍晚），每段一句40字内的画面感描写，贴合世界观。' +
+                '5) events：本体专属随机事件池，3~5条，每条含 text（事件描述）与可选数值效果 money/mood/energy（-5~10），至少一条带数值效果。' +
+                '可带 roles（角色名数组，从userContent的角色名单中选）绑定归属：roles 事件的触发者就是该角色本人，' +
+                '所以文本必须用第一人称"你"（触发者视角），不要出现 roles 里的角色名（避免"自己遇见自己"，特殊情况如"他人谈论自己"除外）；' +
+                '可带 tags（角色标签数组，如["fate"]）：任何带该标签的角色行动都可能触发，文本可用氛围描写或点名"某类人"；' +
+                '不带 roles/tags 为通用事件兜底，至少留 1 条。' +
+                '6) subs：相关子地点数组，2~4个，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么）、desc（简述），并可带 ambience（6段）与 events（2~4条），格式同本体。' +
+                '7) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
+                '8) comment：一段给共建者的评语（庆祝建成，60字内）。' +
+                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"你在教堂地下密室发现一本写着禁忌咒文的旧书，翻了几页便觉心悸","mood":-2,"roles":["言峰绮礼"]},{"text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
             const userContent =
                 `地产目标：${estate.goal}\n` +
                 `规模：${estate.maxProgress} 点（数值越大规模越大）\n` +
                 `共建者：${(estate.contributors || []).length} 人\n` +
-                `世界观：${(estate.ip || []).join('、') || '未知'}`;
+                `世界观：${(estate.ip || []).join('、') || '未知'}\n` +
+                `角色名单：${rosterTxt}`;
             const raw = await callAIWithMessages({ systemPrompt, userContent, maxTokens: 12000, temperature: 0.8 });
             return parseAiJson(raw || '');
         }).catch(() => null);
@@ -711,12 +850,16 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
         estate.name = estate.goal;
         estate.tags = Array.isArray(verdict.tags) ? verdict.tags : [estate.goal];
         estate.desc = String(verdict.desc || '');
+        estate.ambience = sanitizeAmbience(verdict.ambience);
+        estate.events = sanitizeEvents(verdict.events);
         estate.subs = (Array.isArray(verdict.subs) ? verdict.subs : []).map((s, i) => ({
             key: 'est_sub_' + estate.id + '_' + i,
             name: `${estate.goal}-${String(s.name || '子地点' + (i + 1))}`,   // ★ 全名："冬木市-柳洞寺"
             icon: String(s.icon || '🏛️'),
             act: String(s.act || ''),
-            desc: String(s.desc || '')
+            desc: String(s.desc || ''),
+            ambience: sanitizeAmbience(s.ambience),
+            events: sanitizeEvents(s.events)
         }));
         estate.jobs = (Array.isArray(verdict.jobs) ? verdict.jobs : []).slice(0, 3).map((j, i) => {
             const subMatch = j.sub ? (estate.subs || []).find(s => subDisplayName(s.name) === String(j.sub)) : null;   // ★ 全名拆纯名匹配（"冬木市-柳洞寺" → "柳洞寺"）
@@ -782,6 +925,28 @@ function normalizePlaceName(raw, roleId, profile) {
             (e.goal || '') === raw || raw.includes(e.goal || '') || (e.goal || '').includes(raw)));
     if (est) return est.name;   // ★ 规范为地产标准名（建设中/建成都用 estate.name）
     return raw;
+}
+
+// ★ 该角色“认识路”的地点：家 + 职业地点 + 日常行程地点 + 可见地产（本体名+子地点全名）
+function knownPlaceNames(profile, roleId) {
+    const names = new Set(['家']);
+    if (profile.jobKey) {                                   // 职业地点（上班的地方肯定认识路）
+        const j = getJob(profile.jobKey);
+        if (j) {
+            const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name;
+            if (pn) names.add(pn);
+            const sn = j.subKey ? (PLACES.find(p => p.key === j.subKey) || {}).name : '';
+            if (sn) names.add(sn);
+        }
+    }
+    (profile.schedule || []).forEach(s => s.place && names.add(s.place));   // 日常行程
+    (simCityEstates?.estates || []).forEach(e => {                          // 同世界观地产
+        if (canSeeEstate(roleId, profile, e)) {
+            names.add(e.name);
+            (e.subs || []).forEach(s => names.add(s.name));                 // 子地点全名
+        }
+    });
+    return [...names];
 }
 
 // ============================================================
@@ -941,6 +1106,39 @@ async function getJobCounts() {
         counts[k] = (counts[k] || 0) + 1;
     }
     return counts;
+}
+
+// ============ 游戏内好感度（亲密度 + 修正） ============
+function pairKeyOf(a, b) { return [a, b].sort().join('_'); }
+function getIntimacy(a, b) { return simCityRelations?.map?.[pairKeyOf(a, b)]?.score || 0; }
+function getRelationMod(profile, targetId) { return (profile?.relationMods || {})[targetId] || 0; }
+function getEffectiveRelation(profile, targetId) {
+    return Math.max(0, Math.min(100, getIntimacy(profile.id, targetId) + getRelationMod(profile, targetId)));
+}
+function starOf(score) {
+    if (score >= 81) return '★★★★★';
+    if (score >= 61) return '★★★★';
+    if (score >= 41) return '★★★';
+    if (score >= 21) return '★★';
+    if (score >= 5) return '★';
+    return '';
+}
+function relationLayerOf(score) {
+    if (score >= 81) return '挚友'; if (score >= 61) return '亲友'; if (score >= 41) return '密友';
+    if (score >= 21) return '朋友'; if (score >= 5) return '熟人'; return '无感';
+}
+// ★ 注入块："你们的游戏亲密度是X（★密友），你对ta的好感度修正是+10"
+function relationBlockFor(profile, targetId, targetName) {
+    if (!profile || !targetId || targetId === profile.id) return '';
+    const inti = getIntimacy(profile.id, targetId);
+    const mod = getRelationMod(profile, targetId);
+    if (!inti && !mod) return '';   // ★ 无任何好感数据：不注入（省 token）
+    const star = starOf(inti);
+    const parts = [`你们的游戏亲密度是${inti}${star ? `（${star}${relationLayerOf(inti)}）` : ''}`];
+    if (mod) parts.push(`你对${targetName || 'ta'}的好感度修正是${mod > 0 ? '+' : ''}${mod}`);
+    let out = parts.join('，');
+    if (mod) out += `（你实际感觉 ${getEffectiveRelation(profile, targetId)}）`;
+    return out;
 }
 
 // 日期工具（本地日期）
@@ -1136,7 +1334,7 @@ function renderMain(container, globalState, onBack, roleId, profile) {
 }
 
 // 模块级：执行地点行动
-async function doAction(container, globalState, onBack, roleId, profile, act, afterRender) {
+async function doAction(container, globalState, onBack, roleId, profile, act, afterRender, placeKey) {
     const save = async () => { await saveProfile(profile, roleId); };
     if (act === 'work') {
         if (profile.energy < 15) { toast('体力不足，先去公园或诊所休息吧', '#ff9800'); return; }
@@ -1221,7 +1419,7 @@ async function doAction(container, globalState, onBack, roleId, profile, act, af
     }
     await save();
     // ★ 行动后小概率随机事件（世界惊喜感）
-    const simCityEvt = simCityRandomEvent();
+    const simCityEvt = simCityRandomEvent(placeKey, profile);
     if (simCityEvt) {
         if (simCityEvt.money) profile.money = Math.max(0, profile.money + simCityEvt.money);
         if (simCityEvt.mood) profile.mood = Math.min(100, Math.max(0, profile.mood + simCityEvt.mood));
@@ -1256,9 +1454,70 @@ function presentSectionHtml(placeName, roleId) {
         </div>`;
 }
 
+// ★ 动态地产配置：由 placeKey 定位建成地产的本体/子地点（ambience 分时段环境语 + events 地点事件池）
+function estateAmbienceAt(placeKey) {
+    for (const e of (simCityEstates?.estates || [])) {
+        if (e.status !== 'built') continue;
+        if (e.id === placeKey) return { ambience: e.ambience, events: e.events };
+        const s = (e.subs || []).find(x => x.key === placeKey);
+        if (s) return { ambience: s.ambience, events: s.events };
+    }
+    return null;
+}
+
+// ★ 时段 key（6 段，与 placeAmbience 模板一致）
+function ambiencePeriod(hour) {
+    if (hour >= 22 || hour < 5) return 'night';
+    if (hour < 8) return 'dawn';
+    if (hour < 12) return 'morning';
+    if (hour < 14) return 'noon';
+    if (hour < 18) return 'day';
+    return 'dusk';
+}
+
+// ★ 分时段环境语清洗（6 段只留非空；非法输入回退 undefined）
+const AMBIENCE_PERIODS = ['night', 'dawn', 'morning', 'noon', 'day', 'dusk'];
+function sanitizeAmbience(obj) {
+    if (!obj || typeof obj !== 'object') return undefined;
+    const out = {};
+    for (const k of AMBIENCE_PERIODS) {
+        const v = String(obj[k] || '').trim();
+        if (v) out[k] = v;
+    }
+    return Object.keys(out).length ? out : undefined;
+}
+
+// ★ 事件池清洗（与全局池同构：text + money/mood/energy 数值；可带 roles 角色名 / tags 标签关联；非法条目丢弃）
+function sanitizeEvents(arr) {
+    if (!Array.isArray(arr)) return undefined;
+    const out = [];
+    for (const e of arr) {
+        if (!e || typeof e !== 'object') continue;
+        const text = String(e.text || '').trim();
+        if (text.length < 4) continue;
+        // ★ 角色关联：roles 按角色名（profile.name）匹配；tags 按角色标签（profile.tags）匹配；都不带 = 通用事件
+        const roles = Array.isArray(e.roles) ? e.roles.map(String).map(s => s.trim()).filter(Boolean).slice(0, 5) : undefined;
+        const tags = Array.isArray(e.tags) ? e.tags.map(String).map(s => s.trim()).filter(Boolean).slice(0, 5) : undefined;
+        out.push({
+            text,
+            money: Number.isFinite(Number(e.money)) ? Math.round(Number(e.money)) : 0,
+            mood: Number.isFinite(Number(e.mood)) ? Math.round(Number(e.mood)) : 0,
+            energy: Number.isFinite(Number(e.energy)) ? Math.round(Number(e.energy)) : 0,
+            ...(roles && roles.length ? { roles } : {}),
+            ...(tags && tags.length ? { tags } : {})
+        });
+    }
+    return out.length ? out.slice(0, 8) : undefined;
+}
+
 // 地点环境描述（时段 × 地点个性氛围，仅装饰，不可点击）
 //   天气不上场景卡：全局天气由主城横幅展示，避免 AI 提示词收到重复天气
 function placeAmbience(place, hour) {
+    // ★ 动态地产：优先用焕新时生成的分时段环境语（无则回退通用模板）
+    const dyn = estateAmbienceAt(place.key);
+    const dynTxt = dyn && dyn.ambience ? dyn.ambience[ambiencePeriod(hour)] : '';
+    if (dynTxt) return String(dynTxt).trim() + '。';
+
     const hourTxt = (() => {
         if (hour >= 22 || hour < 5) return `夜色下的${place.name}，路灯昏黄，行人稀少`;
         if (hour < 8) return `清晨的${place.name}刚刚苏醒，空气清新`;
@@ -1311,7 +1570,7 @@ function drawerFuncAct(ctx) {
     const name = sub ? sub.name : place.name;
     const act = sub ? sub.act : place.act;
     if (!open) { toast(`🌙 ${name}还没开门（${OPEN_HOURS[sub ? sub.key : place.key][0]}:00 营业）`, '#ff9800'); return; }
-    doAction(ctx.container, ctx.globalState, ctx.onBack, ctx.roleId, ctx.profile, act, ctx.rerender);
+    doAction(ctx.container, ctx.globalState, ctx.onBack, ctx.roleId, ctx.profile, act, ctx.rerender, ctx.sub ? ctx.sub.key : ctx.place.key);
 }
 
 function drawerFuncNight(ctx) {
@@ -1452,6 +1711,8 @@ async function buildAdvContext(place, hour, participants, roleId, isSecond) {
         if (full) {
             const comment = pr.aiProfile?.comment;
             if (comment && comment !== '（评估生成失败）') parts.push(`设定：${comment}`);
+            const persona = personaBlockFor(pr);   // ★ 个性登记（世界书+模板）
+            if (persona) parts.push(`个性：${persona}`);
             const sch = (pr.schedule || pr.aiProfile?.schedule || []);
             if (sch.length) parts.push(`日程：${sch.map(s => `${s.time} ${s.place}${s.act ? ' ' + s.act : ''}`).join('；')}`);
         }
@@ -1466,9 +1727,14 @@ async function buildAdvContext(place, hour, participants, roleId, isSecond) {
         try { const rel = new CharacterStore(a).getRelationById(b); if (rel?.relation) rels.push(`${charName(a)}→${charName(b)}：${rel.relation}`); } catch { }
     }
     const relationBlock = rels.join('；') || '（暂未记录明确关系）';
-    const sceneBlock = `【场景】${place.name}（${hour}点）\n${placeAmbience(place, hour)}`;
+    // buildAdvContext 里 sceneBlock 处
+    const sceneBlock = `【场景】${place.name}（${hour}点）\n${placeAmbience(place, hour)}`;   // 不再拼地点世界书
     const worldBlock = simCityWorldText();
-    return { sceneBlock, worldBlock, castBlock, bystanderBlock, relationBlock };
+    return {
+        presetBlock: placePresetBlock(place),   // 系统级预设 → systemPrompt
+        placeWbBlock: placeWbBlock(place),       // 地区专属 + 父子世界书 → userContent 最前方
+        sceneBlock, worldBlock, castBlock, bystanderBlock, relationBlock
+    };
 }
 
 // ★ 在场同步：不在场的参与者自动退出（主视角/操作者保留），写入系统轮次
@@ -1486,6 +1752,7 @@ function syncAdvPresence(placeName, hour, rec, adv, roleId) {
 
 // ★ 推进一轮：AI 生成 → 结构化 turns → 在场同步 → 离场规则 → 保存 → 条件渲染
 async function advanceAdventure(container, placeKey, advId, roleId, profile, action, rerender) {
+    await ensureAdvLoaded([advId]);   // ★ 兜底：缓存未命中则按需读
     const rec = (simCityAdvRegistry?.adventures || []).find(a => a.id === advId);
     const adv = simCityAdvCache[advId];
     if (!rec || !adv || rec.status !== 'ongoing' || !(rec.participants || []).includes(roleId)) return;
@@ -1502,16 +1769,16 @@ async function advanceAdventure(container, placeKey, advId, roleId, profile, act
         const p = profile || {};
         const myName = charName(roleId);
         const hour = new Date().getHours();
-        const { sceneBlock, worldBlock, castBlock, bystanderBlock, relationBlock } = await buildAdvContext(place, hour, rec.participants, roleId, isSecond);
+        const { presetBlock, placeWbBlock, sceneBlock, worldBlock, castBlock, bystanderBlock, relationBlock } = await buildAdvContext(place, hour, rec.participants, roleId, isSecond);
         const envBlock = `${sceneBlock}${worldBlock ? `\n【今日小城】\n${worldBlock}` : ''}`;
-        // ★ 历史概要：第三人称，不带"谁"/轮数
         const summaries = adv.turns.map(t => t.summary).filter(Boolean).join('；');
         const lastScene = adv.turns[adv.turns.length - 1]?.scene || '';
         const historyBlock = `【剧情概要】${summaries || '（暂无）'}${lastScene ? `\n最近剧情：${lastScene}` : ''}`;
 
         let systemPrompt, userContent;
         if (isSecond) {
-            systemPrompt = '你是"模拟小城"的文游叙事引擎（第二人称沉浸模式）。每轮只输出 JSON：'
+            systemPrompt = (presetBlock ? `【系统预设】${presetBlock}\n` : '')
+                + '你是"模拟小城"的文游叙事引擎（第二人称沉浸模式）。每轮只输出 JSON：'
                 + '{"scene":"正文·沉浸式文游体验（用"你"称呼主视角玩家，其他角色一律用名字，1000~4000字，有画面感）",'
                 + '"summary":"概要·第三人称剧情总结（所有角色一律用名字，200~300字，客观概括本轮进展，不出现"你"）",'
                 + '"ended":false,"ending":"ended时的收尾（2000字内）"}。'
@@ -1519,16 +1786,19 @@ async function advanceAdventure(container, placeKey, advId, roleId, profile, act
                 + '角色真实度：每个在场角色都有独立性格与相互间的关系，须按各角色自身逻辑行动、保持真实，不得为迎合主视角而扭曲角色；'
                 + '语境：主动利用【今日小城】的事件/天气与【角色关系】推动剧情。'
                 + '只输出 JSON 本身。';
-            userContent = `${envBlock}\n\n【主视角】你 = ${myName}（正文中所有第二人称"你"均指代此人）\n【在场角色】\n${castBlock}\n【在场未参与】${bystanderBlock}\n【角色关系】${relationBlock}\n\n${historyBlock}\n\n你的行动：${action}\n请推进正文。`;
+            userContent = (placeWbBlock ? `【地点专属】${placeWbBlock}\n\n` : '')
+                + `${envBlock}\n\n【主视角】你 = ${myName}（正文中所有第二人称"你"均指代此人）\n【在场角色】\n${castBlock}\n【在场未参与】${bystanderBlock}\n【角色关系】${relationBlock}\n\n${historyBlock}\n\n你的行动：${action}\n请推进正文。`;
         } else {
-            systemPrompt = '你是"模拟小城"的文游叙事引擎（第三人称模式）。本模式不存在"你"，所有角色一律用名字描述。每轮只输出 JSON：'
+            systemPrompt = (presetBlock ? `【系统预设】${presetBlock}\n` : '')
+                + '你是"模拟小城"的文游叙事引擎（第三人称模式）。本模式不存在"你"，所有角色一律用名字描述。每轮只输出 JSON：'
                 + '{"scene":"正文·第三人称推进（所有角色用名字，80~150字，有画面感）",'
                 + '"summary":"概要·第三人称剧情总结（所有角色用名字，30~50字）",'
                 + '"ended":false,"ending":"ended时的收尾（50字内）"}。'
                 + '角色真实度：每个在场角色都有独立性格与相互间的关系，须按各角色自身逻辑行动、保持真实，不得为迎合主视角而扭曲角色；'
                 + '语境：主动利用【今日小城】的事件/天气与【角色关系】推动剧情。'
                 + '只输出 JSON 本身。';
-            userContent = `${envBlock}\n\n【在场角色】\n${castBlock}\n【在场未参与】${bystanderBlock}\n【角色关系】${relationBlock}\n\n${historyBlock}\n\n行动：${action}\n请推进正文。`;
+            userContent = (placeWbBlock ? `【地点专属】${placeWbBlock}\n\n` : '')
+                + `${envBlock}\n\n【在场角色】\n${castBlock}\n【在场未参与】${bystanderBlock}\n【角色关系】${relationBlock}\n\n${historyBlock}\n\n行动：${action}\n请推进正文。`;
         }
 
         const raw = await taskManager.watch('cityadv', `文游 · ${rec.placeName}`, async () => {
@@ -1606,11 +1876,15 @@ async function drawerFuncAdventure(ctx) {
                 <button class="simcity-btn primary" data-adv-mode="second">👤 第二人称 · 你是主角</button>
                 <button class="simcity-btn" data-adv-mode="third">📖 第三人称 · 旁观叙事</button>
             </div>
+            <button class="simcity-pop-close" id="advModeCancel" style="margin-top:10px;">取消</button>
         </div>`;
     container.appendChild(overlay);
     overlay.querySelectorAll('[data-adv-mode]').forEach(btn => {
         btn.addEventListener('click', () => { overlay.remove(); startAdventure(ctx, btn.dataset.advMode); });
     });
+    // ★ 修复：误点可返回——取消按钮 + 点击遮罩关闭（与其他弹窗一致）
+    overlay.querySelector('#advModeCancel').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 // ★ 开启新文游：参与者 = 主视角 + 在场角色；mode = second / third
@@ -1721,7 +1995,8 @@ function bindAdvHistToggle(container, roleId) {
 }
 
 // 地点内部视图分发
-function renderPlace(container, globalState, onBack, roleId, profile, placeKey) {
+async function renderPlace(container, globalState, onBack, roleId, profile, placeKey) {
+    const mySeq = ++renderSeq;   // ★ 本次渲染取号    
     const place = findPlace(placeKey);
     // ★ 动态地点（建成地产）可见性拦截：非全公开
     // ③ renderPlace 拦截（L1063-1070）对动态子地点放行：
@@ -1742,6 +2017,17 @@ function renderPlace(container, globalState, onBack, roleId, profile, placeKey) 
 
     const keepDrawer = drawerOpenAt && drawerOpenAt.key === place.key;   // ★ 渲染前记住抽屉状态
     const hour = new Date().getHours();
+    // ★ 按需加载本地点文游全文 + 防竞态（已被更新的渲染取代则放弃）
+    await ensureAdvLoaded(
+        (simCityAdvRegistry?.adventures || [])
+            .filter(a => a.placeKey === place.key && (
+                a.status === 'ongoing'
+                || (a.status === 'ended' && ((a.participants || []).includes(roleId) || (a.pastParticipants || []).includes(roleId)))
+            ))
+            .map(r => r.id)
+    );
+    if (mySeq !== renderSeq) return;
+
     const open = venueOpen(place.key, hour);
     const children = childrenOf(place.key);
     const jobsHere = jobsAt(place.key);
@@ -1752,7 +2038,8 @@ function renderPlace(container, globalState, onBack, roleId, profile, placeKey) 
             <div class="simcity-header">
                 <button class="back-btn" id="placeBack">←</button>
                 <span class="title">${place.icon} ${esc(place.name)}</span>
-                <span class="level"></span>
+                <span class="level" id="sceneSetting" style="cursor:pointer;">⚙️ 场景设定</span>
+
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(place.key) ? ' sc-outdoor' : ''}">
@@ -1824,6 +2111,7 @@ function renderPlace(container, globalState, onBack, roleId, profile, placeKey) 
     });
 
     bindAdvBox(container, place.key, roleId, profile, () => renderPlace(container, globalState, onBack, roleId, profile, place.key));
+    container.querySelector('#sceneSetting')?.addEventListener('click', () => openSceneSetting(container, place, () => renderPlace(container, globalState, onBack, roleId, profile, place.key)));
 
     const careerBtn = container.querySelector('#scCareerBtn');
     if (careerBtn) careerBtn.addEventListener('click', () => {
@@ -1893,20 +2181,32 @@ function renderPlace(container, globalState, onBack, roleId, profile, placeKey) 
 }
 
 // 子地点页面：独立地点（有自己在场），返回按钮回上级地点
-function renderSubPlace(container, globalState, onBack, roleId, profile, sub) {
+async function renderSubPlace(container, globalState, onBack, roleId, profile, sub) {
+    const mySeq = ++renderSeq;   // ★ 本次渲染取号
     const parentPlace = findPlace(sub.parent);
 
     const jobsHere = jobsAt(parentPlace.key, sub.key);
     const careerJob = careerWorkHere(profile, parentPlace.key, sub.key);
     const keepDrawer = drawerOpenAt && drawerOpenAt.key === sub.key;   // ★ 渲染前记住抽屉状态
     const hour = new Date().getHours();
+    // ★ 按需加载本地点文游全文（进行中 / 我已参与过的已结束）
+    await ensureAdvLoaded(
+        (simCityAdvRegistry?.adventures || [])
+            .filter(a => a.placeKey === sub.key && (
+                a.status === 'ongoing'
+                || (a.status === 'ended' && ((a.participants || []).includes(roleId) || (a.pastParticipants || []).includes(roleId)))
+            ))
+            .map(r => r.id)
+    );
+    if (mySeq !== renderSeq) return;   // ★ 已被更新的渲染取代 → 放弃本次
     const open = venueOpen(sub.key, hour);
     container.innerHTML = `
         <div class="simcity-root">
             <div class="simcity-header">
                 <button class="back-btn" id="subBack">←</button>
                 <span class="title">${sub.icon} ${esc(subDisplayName(sub.name))}</span>
-                <span class="level">${esc(parentPlace.name)}</span>
+                <span class="level" id="sceneSetting" style="cursor:pointer;">⚙️ 场景设定</span>
+
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(sub.key) ? ' sc-outdoor' : ''}">
@@ -1962,6 +2262,7 @@ function renderSubPlace(container, globalState, onBack, roleId, profile, sub) {
     });
 
     bindAdvBox(container, sub.key, roleId, profile, () => renderSubPlace(container, globalState, onBack, roleId, profile, sub));
+    container.querySelector('#sceneSetting')?.addEventListener('click', () => openSceneSetting(container, sub, () => renderSubPlace(container, globalState, onBack, roleId, profile, sub)));
 
     const careerBtn = container.querySelector('#scCareerBtn');
     if (careerBtn) careerBtn.addEventListener('click', () => {
@@ -2098,18 +2399,19 @@ function renderHall(container, globalState, onBack, roleId, profile) {
             </div>
             <div class="simcity-body">
                 <div class="simcity-room">
-                    <div class="simcity-item" id="hallWork">
-                        <div class="item-icon">💼</div>
-                        <div class="item-name">打工赚钱</div>
-                        <div class="item-desc">赚取金币（消耗体力）</div>
+                    <div class="simcity-item" id="hallPersona">
+                        <div class="item-icon">📝</div>
+                        <div class="item-name">个性登记</div>
+                        <div class="item-desc">写下专属「世界书」· 绑定角色</div>
                     </div>
                     <div class="simcity-item" id="hallEval">
                         <div class="item-icon">🧑‍💼</div>
                         <div class="item-name">AI 评估服务</div>
                         <div class="item-desc">花费 100 金币，与评估官对话</div>
                     </div>
-                    <button class="simcity-btn" id="hallJobList" style="margin-top:10px;">📋 职业登记表</button>
-
+                    <button class="simcity-btn" id="hallJobList" style="flex:1;">📋 职业登记表</button>
+                    <button class="simcity-btn" id="hallRank" style="flex:1;">🏆 现金排行榜</button>
+                    <button class="simcity-btn" id="hallEstateList" style="flex:1;">🏘️ 地产登记表</button>
                 </div>
                 ${presentSectionHtml('市政厅', roleId)}
 
@@ -2118,7 +2420,7 @@ function renderHall(container, globalState, onBack, roleId, profile) {
         </div>`;
 
     container.querySelector('#hallBack').addEventListener('click', () => renderMain(container, globalState, onBack, roleId, profile));
-    container.querySelector('#hallWork').addEventListener('click', () => doAction(container, globalState, onBack, roleId, profile, 'work'));
+    container.querySelector('#hallPersona').addEventListener('click', () => openPersonaRegistry(container, roleId, profile));
     container.querySelector('#hallEval').addEventListener('click', () => showEvalService(container, globalState, onBack, roleId, profile));
     container.querySelector('#hallJobList').addEventListener('click', async () => {
         const myJob = profile.jobKey && getJob(profile.jobKey);
@@ -2144,6 +2446,67 @@ function renderHall(container, globalState, onBack, roleId, profile) {
         container.appendChild(overlay);
         overlay.querySelector('#jobListClose').addEventListener('click', () => overlay.remove());
     });
+
+    container.querySelector('#hallEstateList').addEventListener('click', async () => {
+        const myJob = profile.jobKey && getJob(profile.jobKey);
+        if (!myJob || !myJob.hallStaff) { toast('🔒 仅限市政厅工作人员查看', '#999'); return; }
+        await loadEstates();   // 保证拿最新地产注册表
+        const list = [...(simCityEstates?.estates || [])]
+            .sort((a, b) => (a.status === 'built' ? 1 : 0) - (b.status === 'built' ? 1 : 0));   // 建设中在前
+        const overlay = document.createElement('div');
+        overlay.className = 'simcity-pop';
+        overlay.innerHTML = `
+        <div class="simcity-pop-card" style="max-height:88%;overflow-y:auto;">
+            <div style="font-weight:700;font-size:15px;text-align:center;margin-bottom:10px;">🏘️ 地产登记表</div>
+            <div style="font-size:12px;color:#999;text-align:center;margin-bottom:8px;">全城动态地产 · 共 ${list.length} 处</div>
+            <div class="simcity-pop-list">
+                ${list.map(e => {
+            const isBuilt = e.status === 'built';
+            return `<div style="padding:8px 4px;border-bottom:1px solid #f0f0f0;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;">
+                            <span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.icon || '🏠'} ${esc(e.name)}</span>
+                            <span style="font-size:11px;color:${isBuilt ? '#2e7d32' : '#f5a623'};font-weight:600;flex-shrink:0;">${isBuilt ? '🟢 已建成' : `🟡 建设中 ${e.progress || 0}%`}</span>
+                        </div>
+                        <div style="font-size:12px;color:#999;margin-top:3px;">建造：${esc(charName(e.owner))} · 子地点 ${(e.subs || []).length} 个${(e.ip || []).length ? ` · 关联IP ${e.ip.length} 个` : ''}</div>
+                        ${isBuilt && (e.subs || []).length ? `<div style="font-size:12px;color:#7c4dff;margin-top:3px;">${(e.subs || []).map(s => esc(subDisplayName(s.name))).join('、')}</div>` : ''}
+                    </div>`;
+        }).join('') || '<div class="story-empty">暂无地产登记</div>'}
+            </div>
+            <button class="simcity-pop-close" id="estateListClose">关闭</button>
+        </div>`;
+        container.appendChild(overlay);
+        overlay.querySelector('#estateListClose').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    });
+
+    container.querySelector('#hallRank').addEventListener('click', async () => {
+        const profiles = await getAllProfiles();
+        const top = profiles
+            .map(p => ({ name: charName(p.id), money: p.money || 0 }))
+            .sort((a, b) => b.money - a.money)
+            .slice(0, 10);
+        const medal = ['🥇', '🥈', '🥉'];
+        const overlay = document.createElement('div');
+        overlay.className = 'simcity-pop';
+        overlay.innerHTML = `
+        <div class="simcity-pop-card">
+            <div style="font-weight:700;font-size:15px;text-align:center;margin-bottom:10px;">🏆 现金排行榜</div>
+            <div style="font-size:12px;color:#999;text-align:center;margin-bottom:8px;">全城角色现金前十 · 实时统计</div>
+            <div class="simcity-pop-list">
+                ${top.map((p, i) => `
+                    <div style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid #f0f0f0;font-size:13px;">
+                        <span style="min-width:28px;font-weight:700;color:${i < 3 ? '#f5a623' : '#999'};">${medal[i] || `${i + 1}.`}</span>
+                        <span style="flex:1;${i === 0 ? 'font-weight:700;' : ''}">${esc(p.name)}</span>
+                        <span style="color:#7c4dff;font-weight:600;">💰 ${p.money}</span>
+                    </div>`).join('') || '<div class="story-empty">暂无数据</div>'}
+            </div>
+            <button class="simcity-pop-close" id="rankClose">关闭</button>
+        </div>`;
+        container.appendChild(overlay);
+        overlay.querySelector('#rankClose').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    });
+
     container.querySelectorAll('.sc-encounter').forEach(btn => {
         btn.addEventListener('click', () => {
             showEncounter(container, roleId, profile, btn.dataset.friend, btn.dataset.place);
@@ -2157,6 +2520,235 @@ function renderHall(container, globalState, onBack, roleId, profile) {
     });
     startDayNightCycle(container);
 
+}
+
+// ★ 场景设定弹窗：系统级预设 + 专属世界书 + 父/子世界书开关
+function openSceneSetting(container, place, rerender) {
+    const cfg = simCityPlaceCfg?.placeConfigs?.[place.key] || {};
+    const presets = simCityPlaceCfg?.presets || [];
+    const myIds = cfg.presetIds || [];
+    const parentPlace = place.parent ? findPlace(place.parent) : null;
+    const subCount = childrenOf(place.key).length;
+
+    // ★ 预设详情弹窗：查看完整内容
+    const showPresetDetail = (name, text) => {
+        const d = document.createElement('div');
+        d.className = 'simcity-pop';
+        d.style.zIndex = '60';   // 盖在场景设定弹窗之上
+        d.innerHTML = `
+            <div class="simcity-pop-card">
+                <div style="font-weight:700;font-size:15px;text-align:center;margin-bottom:10px;">${esc(name)}</div>
+                <div style="font-size:13px;line-height:1.8;color:#333;white-space:pre-wrap;max-height:50vh;overflow-y:auto;padding:10px;background:#faf8f5;border-radius:12px;">${esc(text)}</div>
+                <button class="simcity-pop-close" id="pdClose">关闭</button>
+            </div>`;
+        container.appendChild(d);
+        d.querySelector('#pdClose').addEventListener('click', () => d.remove());
+        d.addEventListener('click', e => { if (e.target === d) d.remove(); });
+    };
+
+    const overlay = document.createElement('div');
+    overlay.className = 'simcity-pop';
+    overlay.innerHTML = `
+        <div class="simcity-pop-card" style="max-height:88%;overflow-y:auto;">          <!-- ★ 卡片可滚动 -->
+            <div style="font-weight:700;font-size:15px;text-align:center;margin-bottom:4px;">⚙️ 场景设定 · ${esc(place.name)}</div>
+            ${parentPlace ? `<div style="font-size:12px;color:#999;text-align:center;margin-bottom:10px;">上级：${esc(parentPlace.name)} · 子地点 ${subCount} 个</div>` : `<div style="font-size:12px;color:#999;text-align:center;margin-bottom:10px;">子地点 ${subCount} 个</div>`}
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin-bottom:4px;">系统级预设（可多选复用）</div>
+            <div id="scenePresetList" style="max-height:240px;overflow-y:auto;">       <!-- ★ 列表调高 140 → 240 -->
+                ${presets.map(t => `
+                <div style="display:flex;align-items:center;gap:6px;padding:6px 2px;font-size:12px;border-bottom:1px solid #f0f0f0;">
+                    <input type="checkbox" data-preset-id="${esc(t.id)}" ${myIds.includes(t.id) ? 'checked' : ''} style="flex-shrink:0;">
+                    <span style="font-weight:600;color:#4a3f6b;white-space:nowrap;">${esc(t.name)}</span>
+                    <span class="preset-text" data-preset-id="${esc(t.id)}" style="flex:1;color:#999;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" title="点击查看完整内容">${esc(t.text)}</span>   <!-- ★ 文本可点击 -->
+                    <button class="preset-del" data-preset-id="${esc(t.id)}" style="border:none;background:none;color:#e53935;font-size:13px;cursor:pointer;flex-shrink:0;">✕</button>
+                </div>`).join('') || '<div style="color:#999;font-size:12px;padding:6px 0;">（暂无预设）</div>'}
+            </div>
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin:10px 0 4px;">新增预设</div>
+            <div style="display:flex;gap:6px;">
+                <input id="presetName" placeholder="预设名（如：AI拟人世界观）" style="flex:1;border:none;background:#f5f3fa;border-radius:10px;padding:8px 10px;font-size:12px;outline:none;min-width:0;">
+                <input id="presetText" placeholder="预设内容" style="flex:2;border:none;background:#f5f3fa;border-radius:10px;padding:8px 10px;font-size:12px;outline:none;min-width:0;">
+            </div>
+            <button class="simcity-btn" id="presetAdd" style="width:100%;margin-top:8px;">＋ 添加预设</button>
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin:12px 0 4px;">专属世界书（每个地点一份）</div>
+            <textarea id="sceneWorldbook" placeholder="自由书写该地点的专属世界书；留空则用默认" style="width:100%;box-sizing:border-box;min-height:80px;border:none;background:#f5f3fa;border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.7;outline:none;resize:vertical;">${esc(cfg.worldbook || '')}</textarea>
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin:12px 0 4px;">周边世界书</div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 0;">
+                <input type="checkbox" id="incParent" ${cfg.includeParent ? 'checked' : ''} ${parentPlace ? '' : 'disabled'}>
+                <span>启用直接父地点的专属世界书${parentPlace ? `（${esc(parentPlace.name)}）` : '（无父地点）'}</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 0;">
+                <input type="checkbox" id="incChildren" ${cfg.includeChildren ? 'checked' : ''} ${subCount ? '' : 'disabled'}>
+                <span>启用直接子地点的专属世界书（${subCount} 个，用于丰富周边描述）</span>
+            </label>
+
+            <div style="display:flex;gap:8px;margin-top:12px;">
+                <button class="simcity-btn primary" id="sceneSave" style="flex:1;">保存</button>
+            </div>
+            <button class="simcity-pop-close" id="sceneClose">关闭</button>
+        </div>`;
+    container.appendChild(overlay);
+
+    // ★ 点击预设文本 → 查看完整内容详情
+    overlay.querySelectorAll('.preset-text').forEach(el => {
+        el.addEventListener('click', () => {
+            const t = presets.find(x => x.id === el.dataset.presetId);
+            if (t) showPresetDetail(t.name, t.text);
+        });
+    });
+
+    // 删除预设
+    overlay.querySelectorAll('.preset-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const pid = btn.dataset.presetId;
+            simCityPlaceCfg.presets = (simCityPlaceCfg.presets || []).filter(t => t.id !== pid);
+            for (const k in (simCityPlaceCfg.placeConfigs || {})) {
+                const c = simCityPlaceCfg.placeConfigs[k];
+                c.presetIds = (c.presetIds || []).filter(x => x !== pid);
+            }
+            await saveSimCityPlaceConfig(simCityPlaceCfg);
+            toast('✅ 预设已删除', '#e53935');
+            overlay.remove();
+        });
+    });
+
+    // 添加预设
+    overlay.querySelector('#presetAdd').addEventListener('click', async () => {
+        const name = overlay.querySelector('#presetName').value.trim();
+        const text = overlay.querySelector('#presetText').value.trim();
+        if (!name || !text) { toast('请填写预设名和内容', '#e53935'); return; }
+        (simCityPlaceCfg.presets = simCityPlaceCfg.presets || []).push({ id: 'preset_' + Date.now().toString(36), name, text });
+        await saveSimCityPlaceConfig(simCityPlaceCfg);
+        toast('✅ 预设已添加，重新打开即可勾选', '#7c4dff');
+        overlay.remove();
+    });
+
+    // 保存场景设定
+    overlay.querySelector('#sceneSave').addEventListener('click', async () => {
+        const wb = overlay.querySelector('#sceneWorldbook').value.trim();
+        const presetIds = [...overlay.querySelectorAll('#scenePresetList input:checked')].map(i => i.dataset.presetId);
+        const includeParent = overlay.querySelector('#incParent').checked;
+        const includeChildren = overlay.querySelector('#incChildren').checked;
+        simCityPlaceCfg = simCityPlaceCfg || { presets: [], placeConfigs: {} };          // 防缓存未加载
+        simCityPlaceCfg.placeConfigs = simCityPlaceCfg.placeConfigs || {};               // 不再读 simCityWorld
+        simCityPlaceCfg.placeConfigs[place.key] = { presetIds, worldbook: wb, includeParent, includeChildren };
+        await saveSimCityPlaceConfig(simCityPlaceCfg);
+        toast('✅ 场景设定已保存', '#7c4dff');
+        overlay.remove();
+        rerender && rerender();
+    });
+
+    overlay.querySelector('#sceneClose').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+// ★ 个性登记弹窗：编辑角色专属世界书 + 勾选复用模板 + 新增自定义模板
+function openPersonaRegistry(container, roleId, profile) {
+    const myIds = profile.personaTemplateIds || [];
+    const allTpl = personaTemplates || [];   // ★ 内置 + 自定义都在这里了，不再拼 PERSONA_TEMPLATES
+
+    const overlay = document.createElement('div');
+    overlay.className = 'simcity-pop';
+    overlay.innerHTML = `
+        <div class="simcity-pop-card">
+            <div style="font-weight:700;font-size:15px;text-align:center;margin-bottom:4px;">📝 个性登记</div>
+            <div style="font-size:12px;color:#999;text-align:center;margin-bottom:10px;">写下专属于 ${esc(charName(roleId))} 的「世界书」，绑定角色本身，AI 会按此设定演绎（主视角 / 非主视角均生效）</div>
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin-bottom:4px;">专属世界书</div>
+            <textarea id="personaText" placeholder="自由书写角色的专属设定、说话风格、背景故事……" style="width:100%;box-sizing:border-box;min-height:90px;border:none;background:#f5f3fa;border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.7;outline:none;resize:vertical;">${esc(profile.worldbook || '')}</textarea>
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin:10px 0 4px;">勾选模板（可多选复用）</div>
+            <div id="personaTplList" style="max-height:180px;overflow-y:auto;">
+                ${allTpl.map(t => `
+                <div style="display:flex;align-items:center;gap:6px;padding:6px 2px;font-size:12px;border-bottom:1px solid #f0f0f0;">
+                    <input type="checkbox" data-tpl-id="${esc(t.id)}" ${myIds.includes(t.id) ? 'checked' : ''} style="flex-shrink:0;">
+                    <span style="font-weight:600;color:#4a3f6b;white-space:nowrap;">${esc(t.name)}</span>
+                    <span style="flex:1;color:#999;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.text)}</span>
+                    <button class="tpl-edit" data-tpl-id="${esc(t.id)}" style="border:none;background:none;color:#7c4dff;font-size:13px;cursor:pointer;padding:0 2px;">✎</button>
+                    <button class="tpl-del" data-tpl-id="${esc(t.id)}" style="border:none;background:none;color:#e53935;font-size:13px;cursor:pointer;padding:0 2px;">✕</button>
+                </div>`).join('') || '<div style="color:#999;font-size:12px;padding:6px 0;">（暂无模板）</div>'}
+            </div>
+
+            <div style="font-size:12px;font-weight:600;color:#4a3f6b;margin:10px 0 4px;">新增自定义模板</div>
+            <div style="display:flex;gap:6px;">
+                <input id="personaTplName" placeholder="模板名（如：话痨）" style="flex:1;border:none;background:#f5f3fa;border-radius:10px;padding:8px 10px;font-size:12px;outline:none;min-width:0;">
+                <input id="personaTplText" placeholder="模板内容" style="flex:2;border:none;background:#f5f3fa;border-radius:10px;padding:8px 10px;font-size:12px;outline:none;min-width:0;">
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:12px;">
+                <button class="simcity-btn" id="personaAddTpl" style="flex:1;">＋ 添加模板</button>
+                <button class="simcity-btn primary" id="personaSave" style="flex:1;">保存</button>
+            </div>
+            <button class="simcity-pop-close" id="personaClose">关闭</button>
+        </div>`;
+    container.appendChild(overlay);
+
+    // ★ 保存：世界书 + 勾选模板 → 绑定角色档案
+    overlay.querySelector('#personaSave').addEventListener('click', async () => {
+        const text = overlay.querySelector('#personaText').value.trim();
+        const checked = [...overlay.querySelectorAll('#personaTplList input:checked')].map(i => i.dataset.tplId);
+        profile.worldbook = text;
+        profile.personaTemplateIds = checked;
+        await saveProfile(profile, roleId);
+        toast('✅ 个性登记已保存', '#7c4dff');
+        overlay.remove();
+    });
+
+    // ★ 编辑：点 ✎ 把模板内容回填到输入框，切换为"保存修改"
+    overlay.querySelectorAll('.tpl-edit').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tpl = (personaTemplates || []).find(t => t.id === btn.dataset.tplId);
+            if (!tpl) return;
+            overlay.querySelector('#personaTplName').value = tpl.name;
+            overlay.querySelector('#personaTplText').value = tpl.text;
+            overlay.querySelector('#personaAddTpl').textContent = '💾 保存修改';
+            overlay.querySelector('#personaAddTpl').dataset.editId = tpl.id;
+        });
+    });
+
+    // ★ 删除：从世界键移除 + 清理所有角色的勾选引用
+    overlay.querySelectorAll('.tpl-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const tid = btn.dataset.tplId;
+            const profiles = await getAllProfiles();
+            const writes = [];
+            for (const p of profiles) {
+                if ((p.personaTemplateIds || []).includes(tid)) {
+                    p.personaTemplateIds = p.personaTemplateIds.filter(x => x !== tid);
+                    writes.push({ profile: p, roleId: p.id });
+                }
+            }
+            if (writes.length) await saveProfiles(writes);
+            personaTemplates = personaTemplates.filter(t => t.id !== tid);   // ★ 内存移除
+            await savePersonaTemplates(personaTemplates);                     // ★ 落库
+            toast('✅ 模板已删除', '#e53935');
+            overlay.remove();
+        });
+    });
+
+    // ★ 添加 / 修改：统一走这里，editId 存在则修改
+    overlay.querySelector('#personaAddTpl').addEventListener('click', async () => {
+        const name = overlay.querySelector('#personaTplName').value.trim();
+        const text = overlay.querySelector('#personaTplText').value.trim();
+        if (!name || !text) { toast('请填写模板名和内容', '#e53935'); return; }
+        if (!personaTemplates) { toast('❌ 模板数据未加载', '#e53935'); return; }
+        const editId = overlay.querySelector('#personaAddTpl').dataset.editId;
+        const list = personaTemplates;
+        if (editId) {
+            const t = list.find(x => x.id === editId);
+            if (t) { t.name = name; t.text = text; }
+        } else {
+            list.push({ id: 'tpl_' + Date.now().toString(36), name, text });
+        }
+        await savePersonaTemplates(personaTemplates);
+        toast(editId ? '✅ 模板已修改' : '✅ 模板已添加', '#7c4dff');
+        overlay.remove();
+    });
+
+    overlay.querySelector('#personaClose').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 // AI 评估服务弹窗：输入角色建议 → 花 100 金币 → 发起评估对话
@@ -2653,7 +3245,7 @@ function renderPropertyPage(container, globalState, onBack, roleId, profile, pro
         </div>`;
     container.querySelector('#propBack').addEventListener('click', () => renderHome(container, globalState, onBack, roleId, profile));
     // ★ 休息入口（default 和 毛坯间 都绑）
-    container.querySelector('#propRest').addEventListener('click', () => doAction(container, globalState, onBack, roleId, profile, 'rest', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop)));
+    container.querySelector('#propRest').addEventListener('click', () => doAction(container, globalState, onBack, roleId, profile, 'rest', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop), 'home'));
     if (!isDefault) {
         container.querySelector('#propAddRoom').addEventListener('click', () => showBuildRoom(container, globalState, onBack, roleId, profile, prop));
         // ★ 打造的房间可点击进入
@@ -2862,6 +3454,12 @@ function renderEstate(container, globalState, onBack, roleId, profile, estate) {
             pop.querySelector('#goalConfirm').addEventListener('click', async () => {
                 const goal = pop.querySelector('#goalInput').value.trim();
                 if (!goal) { toast('请输入目标', '#ff9800'); return; }
+                // ★ 防与静态地点同名（避免与地图已有地点在场索引撞 key）
+                const staticNames = [...new Set(PLACES.map(p => p.name))];
+                if (staticNames.includes(goal)) {
+                    toast(`⚠️ 「${goal}」是小城已有地点，请换个目标名`, '#e53935');
+                    return;
+                }
                 pop.remove();
                 // ★ 防重 + 登记 + 占位
                 if (pendingTargets.some(t => t.estateId === estate.id)) { toast('⚠️ 该地产正在评估中'); return; }
@@ -2936,7 +3534,9 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
             : gfList.map(f => `
                         <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f5f5f5;">
                             <div style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0;">${getAvatarHtml(f.id)}</div>
-                            <div style="flex:1;font-size:14px;">${esc(f.name)}${f.isContact ? ` <span style="font-size:12px;color:#999;">（${esc(realName(f.id))}）</span>` : ''}${(() => {
+                            <div style="flex:1;font-size:14px;">${esc(f.name)}
+                            ${(() => { const s = starOf(getIntimacy(roleId, f.id)); return s ? ` <span style="font-size:11px;color:#ff9800;">${s}</span>` : ''; })()}
+                            ${f.isContact ? ` <span style="font-size:12px;color:#999;">（${esc(realName(f.id))}）</span>` : ''}${(() => {
                     const st = statusNow(f.id, new Date().getHours());
                     return st ? `<span style="font-size:11px;color:#bbb;font-weight:400;">（${st}）</span>` : '';
                 })()}</div>
@@ -2974,7 +3574,7 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
             const fId = btn.dataset.friend;
             const card = buildShareCard(roleId, profile);
             // 预览弹窗（简单卡片，视觉后置）
-            const ok = await new Promise(res => {
+            const choice = await new Promise(res => {
                 const m = document.createElement('div');
                 m.style.cssText = 'position:fixed;inset:0;z-index:600;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
                 m.innerHTML = `<div style="background:#fff;border-radius:18px;width:300px;padding:20px;text-align:center;">
@@ -2982,15 +3582,19 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
                 <div style="font-weight:700;font-size:17px;margin:6px 0;">虚拟小城</div>
                 <div style="font-size:13px;color:#666;line-height:1.8;">${esc(card.name)}（${esc(card.job)}·Lv.${card.level}）<br>金币 ${card.money} · 性格 ${esc(card.traits)}<br>${card.ip ? '世界观 ' + esc(card.ip) + '<br>' : ''}房产 ${card.props} 处</div>
                 <div style="font-size:11px;color:#999;margin-top:8px;">将分享给 ${esc(realName(fId))}</div>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:#555;text-align:left;cursor:pointer;">
+                    <input type="checkbox" id="shareFandom" style="width:16px;height:16px;accent-color:#7c4dff;flex-shrink:0;">
+                    <span>✨ 临时同人增强：对方人设生成时考虑已建成同人场景（仅本次邀请，不写入对方档案）</span>
+                </label>
                 <div style="display:flex;gap:10px;margin-top:14px;">
                     <button id="shareCancel" style="flex:1;border:none;background:#f0f0f0;color:#666;padding:10px;border-radius:12px;cursor:pointer;">取消</button>
                     <button id="shareOk" style="flex:1;border:none;background:#7c4dff;color:#fff;padding:10px;border-radius:12px;cursor:pointer;">确认分享</button>
                 </div></div>`;
                 document.body.appendChild(m);
-                m.querySelector('#shareCancel').addEventListener('click', () => { m.remove(); res(false); });
-                m.querySelector('#shareOk').addEventListener('click', () => { m.remove(); res(true); });
+                m.querySelector('#shareCancel').addEventListener('click', () => { m.remove(); res(null); });
+                m.querySelector('#shareOk').addEventListener('click', () => { const boost = !!m.querySelector('#shareFandom').checked; m.remove(); res(boost); });
             });
-            if (!ok) return;
+            if (choice === null) return;
 
             const shareText = `【分享】我在玩一款叫「虚拟小城」的游戏！这是我的名片：\n游戏名：${card.name}（${card.job}·Lv.${card.level}）\n金币：${card.money} · 性格：${card.traits}${card.ip ? '\n世界观：' + card.ip : ''}\n要不要也来注册一个？`;
             try {
@@ -3003,7 +3607,7 @@ async function showFriends(container, globalState, onBack, roleId, profile) {
                     // ★ 立即进内存显示缓存：同一会话内聊天/群聊即可显示游戏名，不必重进小城
                     charDisplayMap[fId] = { name: fp.name || fRealName, jobKey: '', energy: fp.energy || 100 };
                     toast(`🎉 ${esc(fRealName)} 同意入住！正在生成小城人设…`, '#7c4dff');
-                    startAiEvaluation(fId, fp, `刚收到「${profile.name}」分享的虚拟小城邀请，同意入住`);
+                    startAiEvaluation(fId, fp, `刚收到「${profile.name}」分享的虚拟小城邀请，同意入住`, '', choice);
                     toast(`已注册，重新打开好友列表可见`, '#7c4dff');   // MVP：不强制重渲染
                 } else {
                     toast(`${realName(fId)} 回复：${res.reply.slice(0, 30)}…`);
@@ -3574,19 +4178,21 @@ function simCityWorldText() {
     return parts.join('\n');
 }
 
-//  文游注册表 + 全文缓存（start 时加载一次）
+//  文游注册表
 async function loadAdventures() {
-    advEndedNotice = {};   // ★ 重进小城清空"刚结束"标记（已结束文游改走历史折叠框）
+    advEndedNotice = {};
     simCityAdvRegistry = (await getSimCityAdventures().catch(() => null)) || { adventures: [] };
-    simCityAdvCache = {};
-    for (const rec of simCityAdvRegistry.adventures || []) {
-        const adv = await getAdventure(rec.id).catch(() => null);
-        if (adv) {
-            adv.sessionRounds = (adv.turns || []).length;   // ★ 重进小城后，之前的轮次都算"历史"
-            simCityAdvCache[rec.id] = adv;
-        }
-    }
+    simCityAdvCache = {};   // ★ 全文不进内存，按需读
     return simCityAdvRegistry;
+}
+
+// ★ 按需批量加载文游全文（渲染文游相关页面前调用；已缓存跳过）
+async function ensureAdvLoaded(ids) {
+    const need = [...new Set((ids || []).filter(id => id && !simCityAdvCache[id]))];
+    for (const id of need) {
+        const adv = await getAdventure(id).catch(() => null);
+        if (adv) { adv.sessionRounds = (adv.turns || []).length; simCityAdvCache[id] = adv; }
+    }
 }
 async function saveAdvRegistry() { return saveSimCityAdventures(simCityAdvRegistry); }
 
@@ -3679,9 +4285,25 @@ function jobsAt(placeKey, subKey = '') {
 }
 
 // 行动后小概率随机事件（14% 触发，返回 null 表示无事发生）
-function simCityRandomEvent() {
+//   profile 传入时：优先"与该角色相关"的事件（roles 命中名字 / tags 命中角色标签）；
+//   无相关事件时排除"指定给他人"的条目，只从通用条目取；再无通用条目才回退全局池
+function simCityRandomEvent(placeKey, profile) {
     if (Math.random() >= 0.14) return null;
-    return SIMCITY_RANDOM_EVENTS[Math.floor(Math.random() * SIMCITY_RANDOM_EVENTS.length)];
+    const dyn = placeKey ? estateAmbienceAt(placeKey) : null;   // ★ 动态地产：用地点专属事件池
+    let pool = (dyn && dyn.events && dyn.events.length) ? dyn.events : SIMCITY_RANDOM_EVENTS;
+    if (profile) {
+        const related = pool.filter(ev =>
+            (ev.roles && ev.roles.includes(profile.name)) ||
+            (ev.tags && ev.tags.length && (profile.tags || []).some(t => ev.tags.includes(t)))
+        );
+        if (related.length) {
+            pool = related;
+        } else {
+            const generic = pool.filter(ev => !ev.roles && !ev.tags);
+            if (generic.length) pool = generic;
+        }
+    }
+    return pool[Math.floor(Math.random() * pool.length)];
 }
 
 // 主城顶部横幅：天气 + 今日见闻（无则返回空串）
@@ -3827,6 +4449,27 @@ async function applyCityActions(aiMsgs, roleId, profile, participants) {
             done.push(`🤝 ${speakerName} 和 ${tName} 已互为游戏好友`);
         }
 
+        // ③ 好感修正：说话人 → 目标（默认主视角；可 @游戏名 指定任意在场者），单向写各自档案（-200~200）
+        const rm = t.match(/【好感\s*([+-]?\d{1,3})\s*(?:[@：:]\s*([^】\s]{1,8}))?】/);
+        if (rm) {
+            const delta = Math.max(-200, Math.min(200, parseInt(rm[1], 10) || 0));
+            if (!delta) continue;
+            const targetName = (rm[2] || '').trim();
+            let targetId = roleId;
+            if (targetName) {
+                const found = participants.find(pid => pid !== speakerId && charName(pid) === targetName);
+                if (!found) continue;
+                targetId = found;
+            }
+            if (targetId === speakerId) continue;
+            const sp = await getProfile(speakerId);
+            if (!sp) continue;
+            sp.relationMods = sp.relationMods || {};
+            sp.relationMods[targetId] = Math.max(-200, Math.min(200, (sp.relationMods[targetId] || 0) + delta));
+            await saveProfile(sp, speakerId);
+            done.push(`💗 ${speakerName} 对 ${charName(targetId)} 好感修正 ${delta > 0 ? '+' : ''}${delta}`);
+        }
+
         // ② 约定（临时 / 永久）→ 写说话人自己的档案
         const m = t.match(/【约定】(\d{1,2})[:：](\d{0,2})(?:[，, ]+(.{2,8}))?/);
         if (m) {
@@ -3835,7 +4478,10 @@ async function applyCityActions(aiMsgs, roleId, profile, participants) {
             const fp = await getProfile(speakerId);
             const place = fp ? normalizePlaceName((m[3] || '').trim(), speakerId, fp) : '';
             if (fp && place) {
-                if (t.includes('【永久】')) {
+                // ★ 可达性过滤：说话人必须认识路（家/职业/日程/可见地产），否则婉拒不写入
+                if (!knownPlaceNames(fp, speakerId).includes(place)) {
+                    done.push(`🚫 ${speakerName}不认识路（${place}），婉拒了约定`);
+                } else if (t.includes('【永久】')) {
                     const sched = [...(fp.schedule || [])];
                     sched.push({ time, place, act: `与${profile.name}的约定` });
                     sched.sort((a, b) => String(a.time).localeCompare(String(b.time)));
@@ -4086,8 +4732,11 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
 
     // ★ 读历史：持久读非 temp；临时读 temp + 生命周期检查
     let messages;
+    let tempMsgs = [];   // ★ 偶遇记忆（临时对话；持久对话的 AI 上下文会带上）
     if (persist) {
-        messages = (await getChatMessages(pairKey)).filter(m => !m.temp);
+        const all = await getChatMessages(pairKey);
+        messages = all.filter(m => !m.temp);
+        tempMsgs = all.filter(m => m.temp);
     } else if (gcId) {
         // ★ 共享群聊窗口：读群聊自己的历史（历史由 cleanup 统一管，打开时不删）
         messages = await getGroupChatMessages(gcId);
@@ -4152,7 +4801,7 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
         overlay,
         reload: async () => {
             if (!overlay.isConnected) return;      // 窗口又关了 → 跳过（数据已保存）
-            if (persist) messages = (await getChatMessages(pairKey)).filter(m => !m.temp);
+            if (persist) { const all = await getChatMessages(pairKey); messages = all.filter(m => !m.temp); tempMsgs = all.filter(m => m.temp); }
             else if (gcId) messages = await getGroupChatMessages(gcId);
             else messages = (await getChatMessages(pairKey)).filter(m => m.temp && m.place === placeName);
             renderMsgs(messages.length);
@@ -4390,6 +5039,8 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                 if (selfSched) line += `\n  今日日程：${selfSched}`;
                 const selfCustom = customDesc(pf);
                 if (selfCustom) line += `\n  特殊属性：${esc(selfCustom)}`;
+                const persona = personaBlockFor(pf);   // ★ 个性登记
+                if (persona) line += `\n  个性：${persona}`;
                 if (pf) {
                     // ★ 该角色视角：看主视角（从TA自己的档案）
                     const pidContactA = new CharacterStore(pid).isFriend(roleId);
@@ -4412,6 +5063,15 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                     const ownFriends = pfGf.filter(f => participants.includes(f.id) && f.id !== roleId && f.id !== pid).map(f => charName(f.id));
                     if (ownFriends.length) line += `\n  游戏好友：${ownFriends.join('、')}`;
                 }
+                // ★ 游戏内好感：该角色对在场其他人的亲密度/修正
+                const rels = participants.filter(q => q !== pid).map(q => {
+                    const inti = getIntimacy(pid, q);
+                    const star = starOf(inti);
+                    const mod = getRelationMod(pf, q);
+                    return `${charName(q)}：${inti}${star}${mod ? `（修正${mod > 0 ? '+' : ''}${mod}）` : ''}`;
+                }).join('；');
+                if (rels) line += `\n  游戏好感：${rels}`;
+
                 rosterLines.push(line);
             }
             const rosterText = rosterLines.join('\n');
@@ -4420,9 +5080,10 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                 const { callAIWithMessages } = await import('../aiService.js');
                 // 改为（★ 优先当前 UI 环境卡；无环境卡/远程对话才兜底）：
                 const sceneEnv = (() => {
-                    const pl = PLACES.find(p => p.name === placeName);
+                    const pl = PLACES.find(p => p.name === placeName)
+                        || (simCityEstates?.estates || []).find(e => e.status === 'built' && e.name === placeName);
                     if (!pl) return `${placeName}里，一切照常`;
-                    return uiEnvText(container, placeName) || placeAmbience(pl, hour);
+                    return uiEnvText(container, placeName) || placeAmbience({ key: pl.id || pl.key, name: pl.name }, hour);
                 })();
                 return await callAIWithMessages({
                     systemPrompt: isGroupChat()
@@ -4457,12 +5118,13 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                     userContent: `${simCityWorldText() ? '【今日小城】\n' + simCityWorldText() + '\n\n' : ''}${myInfo}\n\n` +
                         (isGroupChat()
                             ? `【在场者】\n${rosterText || '（只有你们两人）'}\n\n`
-                            : (fp ? `【你】小城名：${esc(fp.name)}（${esc(jobDisplay(fp))}）\n性格：${esc((fp.aiProfile?.traits || []).join('、'))}\n真实身份：${esc(getCharacterNameById(friendId) || '')}\n你的当前状态：${nowStatus || '空闲'}\n今日日程：${(fp.schedule || []).map(s => `${esc(s.time)} ${esc(s.place)}${s.act ? ' ' + esc(s.act) : ''}`).join('；') || '（暂无安排）'}${friendCustom ? `\n特殊属性：${esc(friendCustom)}` : ''}\n` : `【你】${esc(friendName)}\n（未入住小城，作为路人回应）\n`)) +
+                            : (fp ? `【你】小城名：${esc(fp.name)}（${esc(jobDisplay(fp))}）\n性格：${esc((fp.aiProfile?.traits || []).join('、'))}\n真实身份：${esc(getCharacterNameById(friendId) || '')}\n你的当前状态：${nowStatus || '空闲'}\n今日日程：${(fp.schedule || []).map(s => `${esc(s.time)} ${esc(s.place)}${s.act ? ' ' + esc(s.act) : ''}`).join('；') || '（暂无安排）'}${friendCustom ? `\n特殊属性：${esc(friendCustom)}` : ''}${personaBlockFor(fp) ? `\n个性：${personaBlockFor(fp)}` : ''}${(() => { const rb = relationBlockFor(fp, roleId, promptMyName); return rb ? `\n【好感】${rb}` : ''; })()}\n` : `【你】${esc(friendName)}\n（未入住小城，作为路人回应）\n`)) +
                         (isRemote
                             ? `【此刻】${hour}点 · 远程消息：你正拿着手机回${promptMyName}的消息${nowStatus ? '（你此刻' + nowStatus + '）' : ''}\n\n`
                             : `此刻：${placeName}（${hour}点），${sceneEnv}。` +
                             (isGroupChat ? `${charName(friendId)}正在「${friendAct || ('在' + placeName + '待着')}」` : `你正在「${friendAct || ('在' + placeName + '待着')}」`) + `\n\n`) +
                         `【对话历史】\n${history || '（刚开始聊）'}\n\n` +
+                        `${persist && tempMsgs.length ? `【近期偶遇记忆】（你记得的：此前在不同地点偶遇聊过的内容，可自然提及）\n${tempMsgs.filter(m => m.from && m.from !== 'system').slice(-6).map(m => `（${m.place}）${m.from === roleId ? '你' : charName(m.from)}：${stripEventMarkers(m.text || '')}`).join('\n')}\n\n` : ''}` +
                         `请以${groupMode ? '在场者的身份' : '你的身份'}回复${promptMyName}最近这句话：「${text}」`,
                     maxTokens: isGroupChat() ? 1400 : 800, temperature: 0.85
                 });

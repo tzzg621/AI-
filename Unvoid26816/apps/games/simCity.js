@@ -2213,6 +2213,7 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
         card.addEventListener('click', async () => {
             const k = card.dataset.job;
             const j = getJob(k);
+            if (!j) { toast('❌ 职位不存在或已失效，请刷新页面', '#e53935'); return; }   // ★ 防御：不崩
             if (profile.jobKey === k) { toast('🧾 已经就职这个职位了', '#999'); return; }
             const counts = await getJobCounts();
             if ((counts[k] || 0) >= j.quota) { toast(`🔒 ${j.name} 职位已满（${counts[k] || 0}/${j.quota}）`, '#e53935'); return; }
@@ -2354,6 +2355,7 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
         card.addEventListener('click', async () => {
             const k = card.dataset.job;
             const j = getJob(k);
+            if (!j) { toast('❌ 职位不存在或已失效，请刷新页面', '#e53935'); return; }   // ★ 防御：不崩
             if (profile.jobKey === k) { toast('🧾 已经就职这个职位了', '#999'); return; }
             const counts = await getJobCounts();
             if ((counts[k] || 0) >= j.quota) { toast(`🔒 ${j.name} 职位已满（${counts[k] || 0}/${j.quota}）`, '#e53935'); return; }
@@ -4472,13 +4474,13 @@ function getJob(jobKey) {
     if (typeof jobKey === 'string') {
         jobKey = jobKey.replace(/（[^）]*）$/g, '').trim();   // ★ 剥离尾部"（时薪32）"等说明
     }
-    if (JOB_DEFS[jobKey]) return JOB_DEFS[jobKey];   // 精确 key 直接命中（无歧义）
+    if (JOB_DEFS[jobKey]) return { ...JOB_DEFS[jobKey], key: jobKey };
     const hits = [];   // ★ 组合/名字匹配收集（歧义保护：>1 返回 null）
     // 静态：纯名 / 中文组合（"教师"、"学校-教师"、"学校-教学楼-教师"）
     for (const [k, j] of Object.entries(JOB_DEFS)) {
         const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name || j.placeKey;
         const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
-        if (j.name === jobKey || `${pn}-${j.name}` === jobKey || (sn && `${pn}-${sn}-${j.name}` === jobKey)) hits.push(j);
+        if (j.name === jobKey || `${pn}-${j.name}` === jobKey || (sn && `${pn}-${sn}-${j.name}` === jobKey)) hits.push({ ...j, key: k });
     }
     const ests = (simCityEstates?.estates || []).filter(e => e.status === 'built');
     for (const e of ests) {
@@ -4497,7 +4499,7 @@ function getJob(jobKey) {
 // 某地点的所有职位（静态 JOB_DEFS + 动态建成地产职业）
 function jobsAt(placeKey, subKey = '') {
     const list = [];
-    for (const [, j] of Object.entries(JOB_DEFS)) if (j.placeKey === placeKey && (j.subKey || '') === subKey) list.push(j);
+    for (const [k, j] of Object.entries(JOB_DEFS)) if (j.placeKey === placeKey && (j.subKey || '') === subKey) list.push({ ...j, key: k });
     for (const e of (simCityEstates?.estates || [])) {
         if (e.status !== 'built') continue;
         for (const j of (e.jobs || [])) if (j.placeKey === placeKey && (j.subKey || '') === subKey) list.push(j);

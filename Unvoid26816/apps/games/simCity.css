@@ -217,22 +217,76 @@
 .simcity-root.sc-night .simcity-drawer-title { color: #e8ecff; }
 .simcity-root.sc-night .simcity-drawer-grip { background: rgba(160,180,230,0.25); }
 
-/* ============ 内嵌文游内容区 ============ */
-.sc-adv { padding: 8px 2px; }
-/* ★ 文游区在 .simcity-room（两列 grid）内横跨整行 */
+/* ============ 内嵌文游内容区（美化版） ============ */
+.sc-adv { padding: 10px 2px; }
 .simcity-room > .sc-adv { grid-column: 1 / -1; }
+
+/* 头部条：徽章 + 参与者 + 操作按钮 */
+.sc-adv-hd {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(124,77,255,0.06);
+    border: 1px solid rgba(124,77,255,0.12);
+    border-radius: 12px; padding: 6px 10px; margin-bottom: 8px;
+}
+.sc-adv-hd .adv-badge {
+    font-size: 11px; font-weight: 700; color: #7c4dff;
+    background: rgba(124,77,255,0.1); border-radius: 8px; padding: 2px 8px;
+    white-space: nowrap;
+}
+.sc-adv-hd .adv-parts {
+    flex: 1; font-size: 11px; color: #999; font-weight: 400;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sc-adv-hd button {
+    border: none; background: rgba(124,77,255,0.08); color: #7c4dff;
+    font-size: 11px; border-radius: 10px; padding: 3px 8px; cursor: pointer;
+    white-space: nowrap;
+}
+.sc-adv-hd button:active { background: rgba(124,77,255,0.18); }
+
+/* 轮次页（卡片化） */
 .sc-adv-pages {
     display: flex; overflow-x: auto; scroll-snap-type: x mandatory;
-    gap: 10px; max-height: calc(100vh - 280px); -webkit-overflow-scrolling: touch;   /* ← 原 200px */
-    scrollbar-width: none; border-left: 3px solid rgba(124,77,255,0.25); padding-left: 10px;
+    gap: 12px; max-height: calc(100vh - 280px); -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
 }
 .sc-adv-pages::-webkit-scrollbar { display: none; }
 .sc-adv-page {
     flex: 0 0 100%; scroll-snap-align: start; min-width: 0;
+    background: rgba(255,255,255,0.85);
+    border: 1px solid rgba(124,77,255,0.08);
+    border-radius: 14px; padding: 12px 14px;
     font-size: 13px; line-height: 1.9; color: #4a3f6b; white-space: pre-wrap;
-    max-height: calc(100vh - 280px); overflow-y: auto;   /* ← 原 200px */
+    max-height: calc(100vh - 280px); overflow-y: auto;
+    box-shadow: 0 2px 10px rgba(80,60,160,0.05);
 }
-/* 全屏沉浸模式 */
+
+/* 输入区（容器化 + 聚焦描边） */
+.sc-adv-inputbar {
+    display: flex; gap: 6px; margin-top: 10px;
+    background: rgba(124,77,255,0.06);
+    border: 1px solid rgba(124,77,255,0.1);
+    border-radius: 16px; padding: 4px;
+}
+.sc-adv-inputbar:focus-within { border-color: rgba(124,77,255,0.4); }
+.sc-adv-inputbar input {
+    flex: 1; border: none; background: transparent;
+    padding: 6px 10px; font-size: 12px; outline: none; color: #4a3f6b;
+}
+.sc-adv-inputbar button {
+    border: none; background: #7c4dff; color: #fff;
+    border-radius: 12px; padding: 8px 16px; font-size: 12px; cursor: pointer;
+}
+.sc-adv-inputbar button:active { background: #6a3df0; }
+
+/* 完结徽章 */
+.sc-adv-ended-badge {
+    display: inline-block; font-size: 11px; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, #7c4dff, #9c6bff);
+    border-radius: 8px; padding: 3px 10px;
+}
+
+/* 全屏沉浸（卡片去背景，还原长文阅读） */
 .sc-adv.sc-adv-full {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 60;
     background: linear-gradient(180deg,#fdfbff,#f6f1ff);
@@ -240,13 +294,21 @@
     display: flex; flex-direction: column;
 }
 .sc-adv.sc-adv-full .sc-adv-pages { flex: 1; max-height: none; flex-direction: column; overflow-y: auto; scroll-snap-type: none; }
-.sc-adv.sc-adv-full .sc-adv-page { flex: none; max-height: none; padding-bottom: 18px; font-size: 14px; }
-.sc-adv.sc-adv-full .sc-adv-input { margin-top: 10px; }
+.sc-adv.sc-adv-full .sc-adv-page { flex: none; max-height: none; padding: 0 4px 18px; font-size: 14px; background: transparent; border: none; box-shadow: none; }
+.sc-adv.sc-adv-full .sc-adv-inputbar { margin-top: 10px; }
 
-/* 文游历史轮次折叠区 */
+/* 历史折叠 */
 .sc-adv-old summary { list-style: none; cursor: pointer; }
 .sc-adv-old summary::-webkit-details-marker { display: none; }
-.sc-adv-old .sc-adv-page { font-size: 12px; color: #8a7fa8; opacity: .8; }
+.sc-adv-old .sc-adv-page { font-size: 12px; color: #8a7fa8; opacity: .8; background: transparent; border: none; box-shadow: none; padding: 4px; }
+
+/* 夜间适配（补充新样式） */
+.simcity-root.sc-night .sc-adv-page { background: rgba(30,42,84,0.5); border-color: rgba(160,180,230,0.12); color: #e4e9ff; }
+.simcity-root.sc-night .sc-adv-hd { background: rgba(124,77,255,0.1); border-color: rgba(160,180,230,0.12); }
+.simcity-root.sc-night .sc-adv-inputbar { background: rgba(58,70,110,0.5); border-color: rgba(160,180,230,0.15); }
+.simcity-root.sc-night .sc-adv-inputbar input { color: #dfe6ff; }
+.simcity-root.sc-night .sc-adv-inputbar input::placeholder { color: #6a76a8; }
+.simcity-root.sc-night .sc-adv-old .sc-adv-page { background: transparent; color: #aab3d8; }
 
 /* 文游历史剧情折叠框 */
 .adv-hist-item summary { list-style: none; }
@@ -592,8 +654,3 @@
     color: #cdbfff;
 }
 
-/* ============ 夜晚：内嵌文游适配（room 深底时 #4a3f6b 看不清） ============ */
-.simcity-root.sc-night .sc-adv-page { color: #e4e9ff; }                    /* 正文：深蓝底亮字 */
-.simcity-root.sc-night .sc-adv-old .sc-adv-page { color: #aab3d8; }        /* 历史轮次：提亮 */
-.simcity-root.sc-night .sc-adv #scAdvInput { background: rgba(58,70,110,0.6); color: #dfe6ff; }   /* 行动输入框 */
-.simcity-root.sc-night .sc-adv #scAdvInput::placeholder { color: #6a76a8; }

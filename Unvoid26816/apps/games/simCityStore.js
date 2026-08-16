@@ -662,3 +662,25 @@ export async function saveSimCityShops(data) {
         tx.onerror = () => resolve(false);
     });
 }
+
+// ---- 公告牌（地点事件记录：动态，角色/环境/事件驱动）----
+const SIMCITY_BULLETINS_KEY = '__simcity_bulletins__';
+
+export async function getSimCityBulletins() {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_CHATS, 'readonly');
+        const req = tx.objectStore(STORE_CHATS).get(SIMCITY_BULLETINS_KEY);
+        req.onsuccess = () => resolve(req.result || {});
+        req.onerror = () => resolve(null);
+    });
+}
+export async function saveSimCityBulletins(data) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_CHATS, 'readwrite');
+        tx.objectStore(STORE_CHATS).put(data, SIMCITY_BULLETINS_KEY);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+    });
+}

@@ -9,6 +9,7 @@ import {
     getAllProfiles, getPresentAt, chatPairKey, getChatMessages, saveChatMessage, getAllChats, deleteChatMessages, deleteTempChats, getSimCityRelations, saveSimCityRelations,
     getSimCityWorld, saveSimCityWorld, getSimCityPlaceConfig, saveSimCityPlaceConfig, getPersonaTemplates, savePersonaTemplates, getSimCityEstates, saveSimCityEstates, getGroupChatMessages, getGroupRegistry, saveGroupRegistry,
     getAdventure, saveAdventure, getAllAdventures, getSimCityAdventures, saveSimCityAdventures, getSimCityShops, saveSimCityShops,
+    getSimCityBulletins, saveSimCityBulletins,
     getSimCitySettings, saveSimCitySettings
 } from './simCityStore.js';
 import { taskManager } from '../../store/AITaskManager.js';
@@ -38,6 +39,11 @@ let personaTemplates = null;   // ★ 角色提示词模板（内置 + 自定义
 let simCityRelations = null;   // ★ 游戏内好感度（亲密度：pairKey 一份，双向共享）
 let simCitySettings = null;   // ★ 全局设置（historyCount：AI对话记忆条数）
 let simCityShops = {};   // ★ 商店表（shopId → { name, icon, items }；地点只存 shopId 引用）
+let shopInjectedKeys = new Set();   // ★ 货架已注入的对话键（每会话一次，防重复）
+let simCityBulletins = {};   // ★ 公告牌（placeKey → [{ type, text, at }]）
+
+// ★ 对话购买语境词表（B' 触发：上一轮文本命中 + 当前地点有商店 → 本轮注入货架）
+const SHOP_TRIGGER_WORDS = ['买', '购买', '想喝', '想尝', '来一杯', '来一份', '来点', '买点', '买些', '逛逛', '购物', '咖啡', '茶', '酒', '零食', '点心', '商品', '货架'];
 
 // ---- 权限清单（系统接口声明：以后加授权项只改这里）----
 const PERMISSIONS = [
@@ -304,6 +310,7 @@ export async function start(container, globalState, onBack) {
         shopsChanged = true;
     }
     if (shopsChanged) await saveSimCityShops(simCityShops).catch(() => { });
+    simCityBulletins = await getSimCityBulletins().catch(() => { }) || {};
 
     simCitySettings = await getSimCitySettings().catch(() => null);
     await loadAdventures();   // ★ 文游注册表 + 全文缓存
@@ -485,16 +492,26 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '', fandomBoost =
         + (fandomOn && dynamicEstates.length
             ? '\n【建成场景】' + dynamicEstates.map(e => `${e.name}：${(e.ip || []).join('/') || '日常'} · ${(e.tags || []).join('·') || '通用'}${(e.subs || []).length ? '｜子地点：' + e.subs.map(s => `${s.name}（${s.desc || ''}）`).join('、') : ''}`).join('；')
             : '');
-    // ★ 可入职职位（只给组合名，不带薪资——避免 AI 抄括号导致格式错误）
-    const visibleJobs = [
-        ...Object.keys(JOB_DEFS).map(k => {
-            const j = JOB_DEFS[k];
-            const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name || j.placeKey;
-            const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
-            return `${sn ? `${pn}-${sn}-` : `${pn}-`}${j.name}`;
-        }),
-        ...dynamicEstates.flatMap(e => (e.jobs || []).map(j => `${j.subKey ? `${e.name}-${subDisplayName((e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey)}-` : `${e.name}-`}${j.name}`))
-    ];
+    const counts = await getJobCounts();   // ★ 提前算名额（L538 复用，不再二次读取）
+    // ★ 可入职职位（纯组合名 + 剩余名额）
+    const visibleJobs = [];
+    const jobSlots = [];
+    for (const [k, j] of Object.entries(JOB_DEFS)) {
+        const pn = (PLACES.find(p => p.key === j.placeKey) || {}).name || j.placeKey;
+        const sn = j.subKey ? ((PLACES.find(p => p.key === j.subKey) || {}).name || j.subKey) : '';
+        const full = `${sn ? `${pn}-${sn}-` : `${pn}-`}${j.name}`;
+        visibleJobs.push(full);
+        const left = Math.max(0, (j.quota || 1) - (counts[k] || 0));
+        jobSlots.push(`${full}：${left > 0 ? `剩${left}` : '满员'}`);
+    }
+    for (const e of dynamicEstates) {
+        for (const j of (e.jobs || [])) {
+            const full = `${j.subKey ? `${e.name}-${subDisplayName((e.subs || []).find(s => s.key === j.subKey)?.name || j.subKey)}-` : `${e.name}-`}${j.name}`;
+            visibleJobs.push(full);
+            const left = Math.max(0, (j.quota || 1) - (counts[j.key] || 0));
+            jobSlots.push(`${full}：${left > 0 ? `剩${left}` : '满员'}`);
+        }
+    }
 
     const { callAIWithMessages } = await import('../aiService.js');
     const raw = await callAIWithMessages({
@@ -508,6 +525,7 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '', fandomBoost =
             '★ 地点只能从【小城地点】中选择（未列出的地点在小城不存在）：【小城地点】' + placePrompt + '\n' +
             '★ 职位只能从【小城职位】中选择（可修正注册自称职业）：【小城职位】' + visibleJobs.join('；') + '\n' +
             '★ job 必须填【小城职位】里的完整组合名（必须含地点前缀，如"夜之城-学校-教师"、"冬木市-圣杯战争观察员"），禁止省略地点或只填职业名。' +
+            '★ 各职位剩余名额（满员的职位不要选）：' + jobSlots.join('、') + '\n' +
             '根据角色设定选最合适的（注册时的自称职业仅供参考，可修正为更合适的职位；学生可选"学校-学生"）。' +
             '★ 职业要多样化：避免扎堆学生/教师/文员等基础职业，尽量结合角色设定选有特色的职位；若角色与某建成场景（见【建成场景】）世界观相关，优先选该场景的新职业。' +
             '营业时间（未列出的地点全天开放，商业街/娱乐街全天可安排夜市夜宵）：商场10:00~22:00、奶茶店9:00~23:00、餐厅10:00~22:00、游戏厅10:00~24:00、KTV19:00~凌晨02:00、酒吧19:00~凌晨02:00、教学楼8:00~21:00、操场6:00~22:00、学校6:00~22:00；不要安排角色在打烊时间去。' +
@@ -535,7 +553,6 @@ async function aiEvaluateProfile(roleId, profile, suggestion = '', fandomBoost =
     // ★ 职业写入：目标职位存在且未满 → 覆盖 jobKey（旧职位实时释放）；否则保留现职业
     if (data.job && getJob(data.job)) {
         const jd = getJob(data.job);                    // ★ 解析出标准定义（含标准 key）
-        const counts = await getJobCounts();
         if ((counts[jd.key] || 0) < jd.quota) {         // ★ 用 jd.key 统计（不再用 AI 原始字符串）
             profile.jobKey = jd.key;                    // ★ 存标准 key（如 hall-hall-clerk）
             charDisplayMap[roleId] = { name: profile.name || '', jobKey: profile.jobKey || '', energy: profile.energy || 100 };
@@ -836,18 +853,18 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
                 '根据地产的目标与规模，生成建成形态：' +
                 '1) name：最终场景名正常情况下为目标名。' +
                 '2) tags：场景标签数组（世界观、特色，如["fate","圣杯战争"]）。' +
-                '3) desc：一段独立的环境描述语（氛围、风貌，60字内）。' +
+                '3) desc：一段独立的环境描述语（氛围、风貌，60字内）；同时给出 btn（该地点的简短互动文案，10字内，用于地点主按钮，如"推门而入"、"进店坐坐"、"探访古迹"）。' +
                 '4) ambience：本体的分时段环境语，6个时段key：night（22-5点夜色）、dawn（5-8点清晨）、morning（8-12点上午）、noon（12-14点午后）、day（14-18点白天）、dusk（18-22点傍晚），每段一句40字内的画面感描写，贴合世界观。' +
                 '5) events：本体专属随机事件池，3~5条，每条含 text（事件描述）与可选数值效果 money/mood/energy（-5~10），至少一条带数值效果。' +
                 '可带 roles（角色名数组，从userContent的角色名单中选）绑定归属：roles 事件的触发者就是该角色本人，' +
                 '所以文本必须用第一人称"你"（触发者视角），不要出现 roles 里的角色名（避免"自己遇见自己"，特殊情况如"他人谈论自己"除外）；' +
                 '可带 tags（角色标签数组，如["fate"]）：任何带该标签的角色行动都可能触发，文本可用氛围描写或点名"某类人"；' +
                 '不带 roles/tags 为通用事件兜底，至少留 1 条。' +
-                '6) subs：相关子地点数组，2~4个，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么）、desc（简述），并可带 ambience（6段）与 events（2~4条），格式同本体。' +
+                '6) subs：相关子地点数组，2~4个，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么，如"参拜/静思"，作为行为事件）、btn（简短互动文案，10字内，用于按钮显示，如"进寺参拜"，与 act 不同）、desc（简述），并可带 ambience（6段）与 events（2~4条），格式同本体。' +
                 '7) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
                 '8) comment：一段给共建者的评语（庆祝建成，60字内）。' +
                 '9) shops：商店数组（AI 判断该地产/子地点是否有商业属性，有才生成；通常 0~2 个商店）：每个含 name（商店名，将显示为抽屉按钮文案）、icon（emoji）、sub（关联子地点名或"本体"）、items（3~5 个商品：name/icon/desc/price/qty，price 50~5000，qty 1~5，贴合世界观）。' +
-                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"你在教堂地下密室发现一本写着禁忌咒文的旧书，翻了几页便觉心悸","mood":-2,"roles":["言峰绮礼"]},{"text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"shops":[{"name":"卫宫家的杂货铺","icon":"🛒","sub":"柳洞寺","items":[{"name":"魔力水晶","icon":"💎","desc":"蕴含魔力的小石头","price":500,"qty":3},{"name":"圣餐面包","icon":"🍞","desc":"教会食堂的松软面包","price":120,"qty":5}]}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
+                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","btn":"四处看看","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"你在教堂地下密室发现一本写着禁忌咒文的旧书，翻了几页便觉心悸","mood":-2,"roles":["言峰绮礼"]},{"text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"shops":[{"name":"卫宫家的杂货铺","icon":"🛒","sub":"柳洞寺","items":[{"name":"魔力水晶","icon":"💎","desc":"蕴含魔力的小石头","price":500,"qty":3},{"name":"圣餐面包","icon":"🍞","desc":"教会食堂的松软面包","price":120,"qty":5}]}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
             const userContent =
                 `地产目标：${estate.goal}\n` +
                 `规模：${estate.maxProgress} 点（数值越大规模越大）\n` +
@@ -867,6 +884,7 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
         estate.name = estate.goal;
         estate.tags = Array.isArray(verdict.tags) ? verdict.tags : [estate.goal];
         estate.desc = String(verdict.desc || '');
+        estate.btn = String(verdict.btn || '').trim().slice(0, 10) || '开始互动';
         estate.ambience = sanitizeAmbience(verdict.ambience);
         estate.events = sanitizeEvents(verdict.events);
         // ★ 商店：生成 shopId → 存商店表 → 地点只存引用（estate.shopId / subs[i].shopId）
@@ -891,6 +909,7 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
             icon: String(s.icon || '🏛️'),
             act: String(s.act || ''),
             desc: String(s.desc || ''),
+            btn: String(s.btn || '').trim().slice(0, 10) || '进入',
             ambience: sanitizeAmbience(s.ambience),
             events: sanitizeEvents(s.events)
         }));
@@ -1580,7 +1599,7 @@ function placeAmbience(place, hour) {
     const dyn = estateAmbienceAt(place.key);
     const dynTxt = dyn && dyn.ambience ? dyn.ambience[ambiencePeriod(hour)] : '';
     if (dynTxt) return String(dynTxt).trim() + '。';
-
+    if (dyn) return '';   // ★ 动态地产没有生成时段语：不显示通用模板（宁愿留空）
     const hourTxt = (() => {
         if (hour >= 22 || hour < 5) return `夜色下的${place.name}，路灯昏黄，行人稀少`;
         if (hour < 8) return `清晨的${place.name}刚刚苏醒，空气清新`;
@@ -1597,6 +1616,8 @@ function placeAmbience(place, hour) {
 
 // ★ 从当前 UI 环境卡提取环境描述（界面显示什么，AI 就用什么；无环境卡或地点不符返回 ''）
 function uiEnvText(container, placeName) {
+    const envCard = container.querySelector('.simcity-env');
+    if (envCard && envCard.dataset.flipped) return '';   // ★ 公告牌翻转态：不当作环境（群聊 AI 走 placeAmbience 兜底）
     const envName = (container.querySelector('.simcity-env .env-name') || {}).textContent || '';
     const envTxt = (container.querySelector('.simcity-env .env-desc') || {}).textContent || '';
     if (placeName && envName !== placeName) return '';
@@ -2106,10 +2127,11 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(place.key) ? ' sc-outdoor' : ''}">
-                    <div class="simcity-env">
+                    <div class="simcity-env" id="scEnvCard" style="cursor:pointer;">
                         <div class="env-icon">${place.icon}</div>
                         <div class="env-name">${esc(place.name)}</div>
-                        <div class="env-desc">${placeAmbience(place, hour)}</div>
+                        <div class="env-desc">${esc(place.desc || placeAmbience(place, hour))}</div>
+                        ${!PLACES.some(p => p.key === placeKey) && place.desc ? (() => { const t = placeAmbience(place, hour); return t ? `<div class="env-now" style="font-size:11px;color:#8a7fa8;margin-top:4px;">${esc(t)}</div>` : ''; })() : ''}
                     </div>
                 ${advSectionHtml(place.key, roleId)}
                 ${children.map(c => {
@@ -2117,8 +2139,8 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
         return `
                         <div class="simcity-item sub-place" data-sub="${esc(c.key)}" style="${cOpen ? '' : 'opacity:0.5;'}">
                             <div class="item-icon">${c.icon}</div>
-                            <div class="item-name">${esc(c.name)}</div>
-                            <div class="item-desc">${cOpen ? '进入 · ' + esc(c.desc) : '🌙 已打烊'}</div>
+                            <div class="item-name">${esc(subDisplayName(c.name))}</div>
+                            <div class="item-desc">${cOpen ? '进入' : '🌙 已打烊'}</div>
                         </div>`;
     }).join('')}
                     ${place.key === 'fun' ? FUN_RIDES.map(r => `
@@ -2143,7 +2165,7 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
                 <div style="font-size:12px;color:#999;text-align:center;margin-top:10px;">更多互动布置中…</div>
             </div>
             <div class="simcity-actions">
-                <button class="simcity-btn primary" id="scDrawerToggle">${place.icon} ${esc(place.desc)}${open ? '' : '（已打烊）'} <span style="font-size:11px;opacity:0.7;">▴</span></button>
+                <button class="simcity-btn primary" id="scDrawerToggle">${place.icon} ${esc(PLACES.some(p => p.key === placeKey) ? place.desc : (place.btn || '开始互动'))}${open ? '' : '（已打烊）'} <span style="font-size:11px;opacity:0.7;">▴</span></button>
             </div>
             ${drawerHtml({
                 title: place.name,
@@ -2151,7 +2173,7 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
                 text: open ? placeAmbience(place, hour) : `🌙 ${place.name}已打烊，${OPEN_HOURS[place.key][0]}:00 开门`,
                 open: keepDrawer,
                 buttons: [
-                    { id: 'act', label: `${place.icon} ${esc(place.desc)}`, primary: true },
+                    { id: 'act', label: `${place.icon} ${esc(PLACES.some(p => p.key === placeKey) ? place.desc : (place.btn || '开始互动'))}`, primary: true },
                     ...((['mall', 'entertain'].includes(place.key) && (hour >= 19 || hour < 5)) ? [{ id: 'night', label: DRAWER_FUNCS.night.label }] : []),
                     { id: 'adventure', label: ongoingAdvFor(place.key, roleId) ? '🚪 退出文游' : DRAWER_FUNCS.adventure.label },
                     ...((() => { const sc = place.shop ? { estate: place.estate, shop: place.shop } : null; return sc ? [{ id: 'shop', label: `${sc.shop.icon} 逛逛${sc.shop.name}` }] : []; })()),
@@ -2182,6 +2204,29 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
 
     bindAdvBox(container, place.key, roleId, profile, () => renderPlace(container, globalState, onBack, roleId, profile, place.key));
     container.querySelector('#sceneSetting')?.addEventListener('click', () => openSceneSetting(container, place, () => renderPlace(container, globalState, onBack, roleId, profile, place.key)));
+
+    // ★ 环境卡翻转：点击 ↔ 公告牌（临时状态，不保存；闭包捕获，随渲染重建无泄漏）
+    const envCard = container.querySelector('#scEnvCard');
+    if (envCard) {
+        const envOriginal = envCard.innerHTML;
+        let flipped = false;
+        envCard.addEventListener('click', () => {
+            flipped = !flipped;
+            if (flipped) {
+                envCard.dataset.flipped = '1';
+                const list = (simCityBulletins || {})[place.key] || [];
+                envCard.innerHTML = `
+                    <div class="env-icon" style="font-size:18px;">📌</div>
+                    <div class="env-name">公告牌 · ${esc(place.name)}</div>
+                    <div class="env-desc" style="text-align:left;max-height:140px;overflow-y:auto;font-size:12px;line-height:1.8;color:#5a5470;">
+                        ${list.length ? list.slice().reverse().slice(0, 8).map(b => `<div style="margin-bottom:6px;">${esc(new Date(b.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))} ${esc(b.text)}</div>`).join('') : '<div style="text-align:center;color:#999;">这里还没有发生值得记录的事</div>'}
+                    </div>`;
+            } else {
+                delete envCard.dataset.flipped;
+                envCard.innerHTML = envOriginal;
+            }
+        });
+    }
 
     const careerBtn = container.querySelector('#scCareerBtn');
     if (careerBtn) careerBtn.addEventListener('click', () => {
@@ -2281,10 +2326,11 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(sub.key) ? ' sc-outdoor' : ''}">
-                    <div class="simcity-env">
+                    <div class="simcity-env" id="scEnvCard" style="cursor:pointer;">
                         <div class="env-icon">${sub.icon}</div>
                         <div class="env-name">${esc(subDisplayName(sub.name))}</div>
-                        <div class="env-desc">${placeAmbience(sub, hour)}</div>
+                        <div class="env-desc">${esc(sub.desc || placeAmbience(sub, hour))}</div>
+                        ${sub.desc ? (() => { const t = placeAmbience(sub, hour); return t ? `<div class="env-now" style="font-size:11px;color:#8a7fa8;margin-top:4px;">${esc(t)}</div>` : ''; })() : ''}
                     </div>
                     ${advSectionHtml(sub.key, roleId)}
                 </div>
@@ -2302,7 +2348,7 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
                 <div style="font-size:12px;color:#999;text-align:center;margin-top:10px;">更多互动布置中…</div>
             </div>
             <div class="simcity-actions">
-                <button class="simcity-btn primary" id="scDrawerToggle">${sub.icon} ${esc(sub.desc)}${open ? '' : '（已打烊）'} <span style="font-size:11px;opacity:0.7;">▴</span></button>
+                <button class="simcity-btn primary" id="scDrawerToggle">${sub.icon} ${esc(sub.btn || sub.act || '进入')}${open ? '' : '（已打烊）'} <span style="font-size:11px;opacity:0.7;">▴</span></button>
             </div>
             ${drawerHtml({
                 title: subDisplayName(sub.name),
@@ -2342,6 +2388,29 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
 
     bindAdvBox(container, sub.key, roleId, profile, () => renderSubPlace(container, globalState, onBack, roleId, profile, sub));
     container.querySelector('#sceneSetting')?.addEventListener('click', () => openSceneSetting(container, sub, () => renderSubPlace(container, globalState, onBack, roleId, profile, sub)));
+
+    // ★ 环境卡翻转：点击 ↔ 公告牌（临时状态，不保存；闭包捕获，随渲染重建无泄漏）
+    const envCard = container.querySelector('#scEnvCard');
+    if (envCard) {
+        const envOriginal = envCard.innerHTML;
+        let flipped = false;
+        envCard.addEventListener('click', () => {
+            flipped = !flipped;
+            if (flipped) {
+                envCard.dataset.flipped = '1';
+                const list = (simCityBulletins || {})[sub.key] || [];
+                envCard.innerHTML = `
+                    <div class="env-icon" style="font-size:18px;">📌</div>
+                    <div class="env-name">公告牌 · ${esc(subDisplayName(sub.name))}</div>
+                    <div class="env-desc" style="text-align:left;max-height:140px;overflow-y:auto;font-size:12px;line-height:1.8;color:#5a5470;">
+                        ${list.length ? list.slice().reverse().slice(0, 8).map(b => `<div style="margin-bottom:6px;">${esc(new Date(b.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))} ${esc(b.text)}</div>`).join('') : '<div style="text-align:center;color:#999;">这里还没有发生值得记录的事</div>'}
+                    </div>`;
+            } else {
+                delete envCard.dataset.flipped;
+                envCard.innerHTML = envOriginal;
+            }
+        });
+    }
 
     const careerBtn = container.querySelector('#scCareerBtn');
     if (careerBtn) careerBtn.addEventListener('click', () => {
@@ -3242,6 +3311,8 @@ function showAgencyBuy(container, globalState, onBack, roleId, profile) {
                     furniture: [], rect: null, rooms: []   // ★ rect 预留平面可视化；rooms 预留房间内再划分
                 }
             });
+            // ★ 公告牌：购房/搬家事件
+            addBulletin(tpl.area, 'move', `${profile.name}在${tpl.area}购置了「${tpl.name}」`);
             // ★ 买独栋别墅 → 解锁私人地产（世界注册表，初始 30 点进度）
             if (card.dataset.tpl === 'villa') {
                 await loadEstates();
@@ -3746,6 +3817,23 @@ function showPermView(container) {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
+// ★ 公共购买：扣钱 + 背包 + 库存 -1 + 落库（玩家按钮与 AI 指令共用）
+async function buyItem(profile, roleId, estate, shop, itemName) {
+    const it = (shop.items || []).find(x => x.name === itemName || x.name.includes(itemName) || itemName.includes(x.name));
+    if (!it || it.qty <= 0) return { ok: false, msg: `「${itemName}」不在货架上或已售罄` };
+    const cost = it.price || 0;
+    if ((profile.money || 0) < cost) return { ok: false, msg: `金币不足（需要 ${cost}）` };
+    profile.money -= cost;
+    it.qty -= 1;
+    profile.inventory = profile.inventory || [];
+    const inv = profile.inventory.find(x => x.itemId === `${estate.id}_${it.name}`);
+    if (inv) inv.count += 1; else profile.inventory.push({ itemId: `${estate.id}_${it.name}`, name: it.name, icon: it.icon, desc: it.desc, price: cost, count: 1 });
+    await saveProfile(profile, roleId);
+    await saveSimCityShops(simCityShops).catch(() => { });
+    addBulletin(estate.id, 'shop', `${profile.name}在「${shop.name}」买走了${it.name}`);   // ★ 公告牌：购买事件    
+    return { ok: true, msg: `购入「${it.name}」×1（💰${cost}），已放入背包` };
+}
+
 // ★ 商店弹窗：商品列表 + 购买（扣金币 → 进背包；库存改商店表 → saveSimCityShops）
 function showShop(container, globalState, onBack, roleId, profile, estate, shop) {
     const overlay = document.createElement('div');
@@ -3781,19 +3869,13 @@ function showShop(container, globalState, onBack, roleId, profile, estate, shop)
         btn.addEventListener('click', async () => {
             const it = (shop.items || [])[parseInt(btn.dataset.i, 10)];
             if (!it || it.qty <= 0) return;
-            const cost = it.price || 0;
-            if ((profile.money || 0) < cost) { toast('❌ 金币不足', '#e53935'); return; }
-            profile.money -= cost;
-            it.qty -= 1;
-            profile.inventory = profile.inventory || [];
-            const inv = profile.inventory.find(x => x.itemId === `${estate.id}_${it.name}`);
-            if (inv) inv.count += 1; else profile.inventory.push({ itemId: `${estate.id}_${it.name}`, name: it.name, icon: it.icon, desc: it.desc, price: cost, count: 1 });
-            await saveProfile(profile, roleId);
-            await saveSimCityShops(simCityShops).catch(() => { });   // ★ 库存只写商店表，不碰地产
-            btn.disabled = it.qty <= 0;
-            btn.textContent = it.qty > 0 ? '购买' : '售罄';
-            btn.style.background = it.qty > 0 ? '#7c4dff' : '#e0e0e0';
-            toast(`✅ 购入 ${it.name}，已放入背包`);
+            const r = await buyItem(profile, roleId, estate, shop, it.name);
+            toast(r.ok ? `✅ ${r.msg}` : `❌ ${r.msg}`, r.ok ? '#333' : '#e53935');
+            if (r.ok) {
+                btn.disabled = it.qty <= 0;
+                btn.textContent = it.qty > 0 ? '购买' : '售罄';
+                btn.style.background = it.qty > 0 ? '#7c4dff' : '#e0e0e0';
+            }
         });
     });
 }
@@ -4453,6 +4535,7 @@ function getPlace(placeKey) {
     if (e) {
         return {
             key: e.id, name: e.name, icon: e.icon || '🏰',
+            btn: e.btn || '开始互动',
             act: 'rest', desc: e.desc || '',
             vibes: e.ambient || [],
             shop: e.shopId ? simCityShops[e.shopId] : null,   // ★ 商店直接挂地点对象
@@ -4464,7 +4547,15 @@ function getPlace(placeKey) {
     for (const est of (simCityEstates?.estates || [])) {
         if (est.status !== 'built') continue;
         const s = (est.subs || []).find(x => x.key === placeKey);
-        if (s) return { key: s.key, name: s.name, icon: s.icon || '🏛️', act: s.act || 'rest', desc: s.desc || '', parent: est.id, subs: [], shop: s.shopId ? simCityShops[s.shopId] : null, estate: est };
+        if (s) return {
+            key: s.key, name: s.name, icon: s.icon || '🏛️',
+            btn: s.btn || '进入',
+            act: s.act || 'rest', 
+            desc: s.desc || '', 
+            parent: est.id, subs: [], 
+            shop: s.shopId ? simCityShops[s.shopId] : null, 
+            estate: est
+        };
     }
     return null;
 }
@@ -4632,7 +4723,7 @@ async function showNightEvent(container, roleId, profile, placeName, subKey) {
 
 // 执行 AI 回复里的游戏内操作（约定 / 加好友），返回提示列表
 // aiMsgs: [{ from: 角色id, text: 该角色说的话, noAction?: true（未锁定到在场者，跳过动作）}]
-async function applyCityActions(aiMsgs, roleId, profile, participants) {
+async function applyCityActions(aiMsgs, roleId, profile, participants, shopCfg) {
     const done = [];
     const today = dayStr(new Date());
     for (const ai of aiMsgs) {
@@ -4691,6 +4782,15 @@ async function applyCityActions(aiMsgs, roleId, profile, participants) {
             sp.relationMods[targetId] = Math.max(-200, Math.min(200, (sp.relationMods[targetId] || 0) + delta));
             await saveProfile(sp, speakerId);
             done.push(`💗 ${speakerName} 对 ${charName(targetId)} 好感修正 ${delta > 0 ? '+' : ''}${delta}`);
+        }
+        // ④ 购买：说话人 → 当前对话地点商店（AI 自主购买；【购买@商品名】）
+        const buyM = t.match(/【购买@([^】\s]{1,12})】/);
+        if (buyM && shopCfg) {
+            const sp = await getProfile(speakerId);
+            if (sp) {
+                const r = await buyItem(sp, speakerId, shopCfg.estate, shopCfg.shop, buyM[1].trim());
+                done.push(r.ok ? `🛒 ${speakerName}${r.msg}` : `🚫 ${speakerName}${r.msg}`);
+            }
         }
 
         // ② 约定（临时 / 永久）→ 写说话人自己的档案
@@ -5301,6 +5401,27 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                 rosterLines.push(line);
             }
             const rosterText = rosterLines.join('\n');
+            // ★ 商店上下文（当前对话地点；远程不能买）
+            const curShopCfg = (!isRemote) ? (() => {
+                for (const e of (simCityEstates?.estates || [])) {
+                    if (e.status !== 'built') continue;
+                    if (e.name === placeName && e.shopId && simCityShops[e.shopId]) return { estate: e, shop: simCityShops[e.shopId] };
+                    const sub = (e.subs || []).find(x => x.name === placeName);
+                    if (sub && sub.shopId && simCityShops[sub.shopId]) return { estate: e, shop: simCityShops[sub.shopId] };
+                }
+                return null;
+            })() : null;
+            // ★ B' 触发：上一轮/上上轮文本有购买语境 + 有商店 + 本会话未注入过 → 本轮注入货架
+            const convShopKey = (gcId ? 'g:' + gcId : pairKey + (persist ? '' : '@' + placeName));
+            const shopInjected = shopInjectedKeys.has(convShopKey);
+            const lastTwoText = messages.slice(-2).map(m => m.text || '').join(' ');
+            const hasShopCue = !!curShopCfg && !shopInjected && SHOP_TRIGGER_WORDS.some(w => lastTwoText.includes(w));
+            if (hasShopCue) shopInjectedKeys.add(convShopKey);
+            const shopLine = curShopCfg
+                ? (hasShopCue
+                    ? `【商店】「${curShopCfg.shop.name}」的货架（想买时在回复末尾输出【购买@商品名】即可）：\n${curShopCfg.shop.items.map(it => `- ${it.icon} ${it.name}：${it.desc || ''}（💰${it.price}，剩${it.qty}）`).join('\n')}\n\n`
+                    : `【商店】此地有「${curShopCfg.shop.name}」（想买可询问货架）。\n\n`)
+                : '';
 
             const reply = await taskManager.watch('citychat', `小城对话 · ${friendName}`, async () => {
                 const { callAIWithMessages } = await import('../aiService.js');
@@ -5311,13 +5432,14 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                     if (!pl) return `${placeName}里，一切照常`;
                     return uiEnvText(container, placeName) || placeAmbience({ key: pl.id || pl.key, name: pl.name }, hour);
                 })();
+
                 return await callAIWithMessages({
                     systemPrompt: isGroupChat()
                         ? '"模拟小城"此刻正在' + placeName + '（' + hour + '点）进行一场小城闲聊。\n' +
                         '在场的人：' + participants.filter(id => id !== roleId).map(charName).join('、') + '。你将扮演在场的人推进对话。\n' +
                         '规则：\n' +
                         '1. 每轮由最相关的人回应——被点名的、与话题有关的、或想插话的；可以多人依次发言。不要总是由同一个人回应，如果连续几轮都是某人在说，就让其他人开口或插话（除非被点名）。尽量一轮中输出多条信息。禁止替（' + promptMyName + '）说话。\n' +
-                        '2. 输出格式：每行必须以「名字：内容」开头（名字用在场者的名字），一行一人，可连续多行；禁止不带名字的发言。\n' +
+                        '2. 输出格式：每行必须以「名字：内容」开头，一行一人，可连续多行；名字必须严格使用【在场者】中的游戏名或真实身份名，禁止加称谓、职业、括号注释或任何改写；禁止不带名字的发言。\n' +
                         '3. 每个角色的视角已在【在场者视角】分别给出（TA对其他在场者的认知、关系、真实身份等），扮演谁就用谁的视角——TA知道什么、怎么看其他人都以该角色视角块为准；可以互相搭话、调侃、聊自己的事。\n' +
                         '4. 角色有自己的信息视角，各个角色对其他角色的熟知度也会有区别，根据角色间的关系和给到的认知信息进行对话；没有给出的关系、对方真实身份、未参与时的对话，不得假设或编造。新加入的角色不知道加入前的对话，若相关就让TA自然询问或保持不知情。\n' +
                         '5. 回应简短（每人20~60字）。\n' +
@@ -5341,6 +5463,7 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
 
                         '5. 只输出对话内容（可含上述标记），不要任何解释',
 
+
                     userContent: `${simCityWorldText() ? '【今日小城】\n' + simCityWorldText() + '\n\n' : ''}${myInfo}\n\n` +
                         (isGroupChat()
                             ? `【在场者】\n${rosterText || '（只有你们两人）'}\n\n`
@@ -5349,6 +5472,7 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                             ? `【此刻】${hour}点 · 远程消息：你正拿着手机回${promptMyName}的消息${nowStatus ? '（你此刻' + nowStatus + '）' : ''}\n\n`
                             : `此刻：${placeName}（${hour}点），${sceneEnv}。` +
                             (isGroupChat ? `${charName(friendId)}正在「${friendAct || ('在' + placeName + '待着')}」` : `你正在「${friendAct || ('在' + placeName + '待着')}」`) + `\n\n`) +
+                        `${shopLine}` +
                         `【对话历史】\n${history || '（刚开始聊）'}\n\n` +
                         `${(() => {
                             const mem = persist ? tempMsgs : (gcId ? [] : persistMsgs);   // ★ 持久对话带临时记忆；临时对话带好友框记忆；群聊不带
@@ -5382,6 +5506,20 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
                                 normName(charName(pid)) === nn ||
                                 (getCharacterNameById(pid) && normName(getCharacterNameById(pid)) === nn));
                         }
+                        // ②' 变体容错：去括号注释 + 去常见称谓后缀 → 再匹配；仍无则双向子串匹配（防"克莱恩"省略"·莫雷蒂"、"言峰绮礼神父"）
+                        if (!pool.length) {
+                            const cleanNm = nm.replace(/[（(].*?[）)]/g, '').replace(/[号先生小姐女士同学老师神父牧师老板店主店员学徒]$/g, '').trim();
+                            const nn2 = normName(cleanNm);
+                            pool = others.filter(pid => {
+                                const cn = charName(pid), rn = getCharacterNameById(pid);
+                                if (nn2 && (normName(cn) === nn2 || (rn && normName(rn) === nn2))) return true;
+                                if (cleanNm.length >= 2) {
+                                    if (cn && (cn.includes(cleanNm) || cleanNm.includes(cn))) return true;
+                                    if (rn && (rn.includes(cleanNm) || cleanNm.includes(rn))) return true;
+                                }
+                                return false;
+                            });
+                        }
                         // ③ 歧义保护：命中 >1 视为无法锁定 → 丢弃该行，绝不挂到 friendId 名下
                         const speaker = pool.length === 1 ? pool[0] : null;
                         if (speaker) aiMsgs.push({ from: speaker, text: m[2].trim() });
@@ -5397,7 +5535,12 @@ async function showCityChat(container, roleId, profile, friendId, placeName, per
             }
             const startIdx = messages.length;   // ★ 记录 AI 回复加入前的索引（群聊逐条浮现用）
             // ★ 在 aiMsgs 归属完成后再执行游戏内操作（谁说的写谁）
-            const actions = await applyCityActions(aiMsgs, roleId, profile, participants);
+            const actions = await applyCityActions(aiMsgs, roleId, profile, participants, curShopCfg);
+            // ★ 公告牌：对话事件
+            if (placeName && !isRemote) {
+                const pk = placeKeyFromName(placeName);
+                addBulletin(pk, 'chat', `${charName(roleId)}和${charName(friendId)}在${placeName}聊了很久`);
+            }
             await applyEventActions(aiMsgs, placeName);   // ★ 事件产出 → 全局事件池（流言/传闻/新闻）
             for (const ai of aiMsgs) {
                 const cleanText = stripEventMarkers(ai.text.trim());   // ★ 剥离事件标记（事件已入库）

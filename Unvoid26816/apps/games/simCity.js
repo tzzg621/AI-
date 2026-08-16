@@ -42,6 +42,14 @@ let simCityShops = {};   // ★ 商店表（shopId → { name, icon, items }；�
 let shopInjectedKeys = new Set();   // ★ 货架已注入的对话键（每会话一次，防重复）
 let simCityBulletins = {};   // ★ 公告牌（placeKey → [{ type, text, at }]）
 let simCityResidentials = {};   // ★ 住宅区详情（placeKey → { name, houses }；地点只带 residential 名字字段）
+let pendingEvents = {};   // ★ 地点事件槽（待参与事件；sessionStorage 页面级缓存，刷新不丢）
+
+// ★ 事件槽：sessionStorage 页面级缓存（刷新不丢，关页自动清）
+const PENDING_EVENTS_KEY = 'simcity_pending_events';
+function loadPendingEvents() { try { return JSON.parse(sessionStorage.getItem(PENDING_EVENTS_KEY) || '{}'); } catch (e) { return {}; } }
+function savePendingEvents() { try { sessionStorage.setItem(PENDING_EVENTS_KEY, JSON.stringify(pendingEvents)); } catch (e) { } }
+function advStateKeyOf(roleId, placeKey) { return `simcity_adv_${roleId}_${placeKey}`; }
+function hasOngoingEventAdv(roleId, placeKey) { try { return !!sessionStorage.getItem(advStateKeyOf(roleId, placeKey)); } catch (e) { return false; } }
 
 // ★ 对话购买语境词表（B' 触发：上一轮文本命中 + 当前地点有商店 → 本轮注入货架）
 const SHOP_TRIGGER_WORDS = ['买', '购买', '想喝', '想尝', '来一杯', '来一份', '来点', '买点', '买些', '逛逛', '购物', '咖啡', '茶', '酒', '零食', '点心', '商品', '货架'];
@@ -312,6 +320,12 @@ export async function start(container, globalState, onBack) {
     }
     if (shopsChanged) await saveSimCityShops(simCityShops).catch(() => { });
     simCityBulletins = await getSimCityBulletins().catch(() => { }) || {};
+
+    pendingEvents = loadPendingEvents();
+    const evToday = dayStr(new Date());
+    let evChanged = false;
+    for (const k in pendingEvents) { const ev = pendingEvents[k]; if (!ev || dayStr(new Date(ev.at || 0)) !== evToday) { delete pendingEvents[k]; evChanged = true; } }
+    if (evChanged) savePendingEvents();
 
     simCitySettings = await getSimCitySettings().catch(() => null);
     await loadAdventures();   // ★ 文游注册表 + 全文缓存
@@ -1532,14 +1546,15 @@ async function doAction(container, globalState, onBack, roleId, profile, act, af
         toast('🏟️ 跑了几圈，出了一身汗', '#2e7d32');
     }
     await save();
-    // ★ 行动后小概率随机事件（世界惊喜感）
+    // ★ 行动后小概率随机事件：挂事件槽（环境卡感叹号可深入体验）；属性效果照常应用
     const simCityEvt = simCityRandomEvent(placeKey, profile);
     if (simCityEvt) {
         if (simCityEvt.money) profile.money = Math.max(0, profile.money + simCityEvt.money);
         if (simCityEvt.mood) profile.mood = Math.min(100, Math.max(0, profile.mood + simCityEvt.mood));
         if (simCityEvt.energy) profile.energy = Math.min(100, Math.max(0, profile.energy + simCityEvt.energy));
+        if (placeKey) { pendingEvents[placeKey] = { text: simCityEvt.text, at: Date.now() }; savePendingEvents(); }
         await save();
-        toast(simCityEvt.text, (simCityEvt.money < 0 || simCityEvt.mood < 0) ? '#e53935' : '#7c4dff');
+        toast('🔔 这里似乎发生了什么，看看环境卡右上角', '#ff9800');
     }
     (afterRender || renderMain)(container, globalState, onBack, roleId, profile);
 }
@@ -2213,7 +2228,8 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(place.key) ? ' sc-outdoor' : ''}">
-                    <div class="simcity-env" id="scEnvCard" style="cursor:pointer;">
+                    <div class="simcity-env" id="scEnvCard" style="cursor:pointer;position:relative;">
+                        ${(pendingEvents[place.key] || hasOngoingEventAdv(roleId, place.key)) ? `<div id="scEventBell" style="position:absolute;top:8px;right:10px;font-size:18px;cursor:pointer;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.25));">${hasOngoingEventAdv(roleId, place.key) ? '🎭' : '🔔'}</div>` : ''}                    
                         <div class="env-icon">${place.icon}</div>
                         <div class="env-name">${esc(place.name)}</div>
                         <div class="env-desc">${esc(place.desc || placeAmbience(place, hour))}</div>
@@ -2329,6 +2345,20 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
             }
         });
     }
+
+    const eventBell = container.querySelector('#scEventBell');
+    if (eventBell) eventBell.addEventListener('click', (e) => {
+        e.stopPropagation();   // ★ 不触发环境卡翻转
+        const pk = place.key;   // ★ renderSubPlace 处用 sub.key
+        const rk = advStateKeyOf(roleId, pk);
+        if (hasOngoingEventAdv(roleId, pk)) {
+            // ★ 找回进行中的事件文游
+            runTextAdventure(container, { title: '事件', icon: '🎭', placeName: place.name, roleId, profile, toast }, rk);
+        } else {
+            const ev = pendingEvents[pk];
+            if (ev) showPendingEvent(container, globalState, onBack, roleId, profile, place, ev, () => renderPlace(container, globalState, onBack, roleId, profile, place.key));
+        }
+    });
 
     const careerBtn = container.querySelector('#scCareerBtn');
     if (careerBtn) careerBtn.addEventListener('click', () => {
@@ -2453,11 +2483,12 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
             </div>
             <div class="simcity-body">
                 <div class="simcity-room${SIMCITY_OUTDOOR.includes(sub.key) ? ' sc-outdoor' : ''}">
-                    <div class="simcity-env" id="scEnvCard" style="cursor:pointer;">
+                    <div class="simcity-env" id="scEnvCard" style="cursor:pointer;position:relative;">
                         <div class="env-icon">${sub.icon}</div>
                         <div class="env-name">${esc(subDisplayName(sub.name))}</div>
                         <div class="env-desc">${esc(sub.desc || placeAmbience(sub, hour))}</div>
                         ${sub.desc ? (() => { const t = placeAmbience(sub, hour); return t ? `<div class="env-now" style="font-size:11px;color:#8a7fa8;margin-top:4px;">${esc(t)}</div>` : ''; })() : ''}
+                        ${(pendingEvents[sub.key] || hasOngoingEventAdv(roleId, sub.key)) ? `<div id="scEventBell" style="position:absolute;top:8px;right:10px;font-size:18px;cursor:pointer;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.25));">${hasOngoingEventAdv(roleId, sub.key) ? '🎭' : '🔔'}</div>` : ''}
                     </div>
                     ${advSectionHtml(sub.key, roleId)}
                 </div>
@@ -2539,6 +2570,18 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
             }
         });
     }
+    const eventBell = container.querySelector('#scEventBell');
+    if (eventBell) eventBell.addEventListener('click', (e) => {
+        e.stopPropagation();   // ★ 不触发环境卡翻转
+        const pk = sub.key;
+        const rk = advStateKeyOf(roleId, pk);
+        if (hasOngoingEventAdv(roleId, pk)) {
+            runTextAdventure(container, { title: '事件', icon: '🎭', placeName: sub.name, roleId, profile, toast }, rk);
+        } else {
+            const ev = pendingEvents[pk];
+            if (ev) showPendingEvent(container, globalState, onBack, roleId, profile, sub, ev, () => renderSubPlace(container, globalState, onBack, roleId, profile, sub));
+        }
+    });
 
     const careerBtn = container.querySelector('#scCareerBtn');
     if (careerBtn) careerBtn.addEventListener('click', () => {
@@ -4063,6 +4106,68 @@ function showShop(container, globalState, onBack, roleId, profile, estate, shop)
             }
         });
     });
+}
+
+// ★ 事件弹窗：开场 + 是否深入体验（文游模式）
+function showPendingEvent(container, globalState, onBack, roleId, profile, place, ev, onReturn) {
+    const overlay = document.createElement('div');
+    overlay.className = 'simcity-pop';
+    overlay.innerHTML = `
+        <div class="simcity-pop-card">
+            <div style="font-weight:700;font-size:15px;margin-bottom:4px;">🔔 事件 · ${esc(place.name)}</div>
+            <div style="font-size:12px;color:#999;margin-bottom:10px;">${new Date(ev.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</div>
+            <div style="font-size:13px;line-height:1.8;color:#333;white-space:pre-wrap;max-height:40vh;overflow-y:auto;padding:10px;background:#faf8f5;border-radius:12px;">${esc(ev.text)}</div>
+            <div style="display:flex;gap:10px;margin-top:14px;">
+                <button id="evSkip" class="simcity-pop-close" style="flex:1;margin:0;">跳过</button>
+                <button id="evGo" style="flex:1;border:none;background:#7c4dff;color:#fff;border-radius:12px;padding:10px;font-size:13px;cursor:pointer;">🎭 深入体验</button>
+            </div>
+        </div>`;
+    container.appendChild(overlay);
+    overlay.querySelector('#evSkip').addEventListener('click', () => overlay.remove());   // ★ 跳过：事件槽保留（下次可再点）
+    overlay.querySelector('#evGo').addEventListener('click', () => {
+        overlay.remove();
+        delete pendingEvents[place.key];
+        savePendingEvents();   // ★ 事件已进入文游，感叹号由文游状态（🎭）接管
+        const rk = advStateKeyOf(roleId, place.key);
+        // ★ 地点预设 + 地点世界书（从 simCityPlaceCfg 取）
+        const pc = simCityPlaceCfg?.placeConfigs?.[place.key] || {};
+        const presetsTxt = (pc.presetIds || []).map(id => (simCityPlaceCfg?.presets || []).find(p => p.id === id)?.text).filter(Boolean).join('\n');
+        // ★ 角色详细信息（同评估：真实卡 base）+ 个性登记（模板+专属世界书）
+        let base = null;
+        try {
+            const f = JSON.parse(localStorage.getItem('rolebook_characters') || '[]').find(c => c.id === roleId);
+            if (f?.base) base = f.base;
+            else { const f2 = JSON.parse(localStorage.getItem('worldnet_extra_characters') || '[]').find(c => c.id === roleId); if (f2?.base) base = f2.base; }
+        } catch { }
+        base = base || {};
+        const baseInfo = [
+            base.name ? `真实名：${base.name}` : '',
+            base.gender ? `性别：${base.gender}` : '',
+            base.age ? `年龄：${base.age}` : '',
+            base.desc ? `人设：${base.desc}` : '',
+            base.style ? `说话风格：${base.style}` : '',
+            base.secret ? `内心秘密：${base.secret}` : '',
+            base.detail ? `详细设定：${base.detail}` : ''
+        ].filter(Boolean).join('，');
+        const persona = personaBlockFor(profile);
+
+        runTextAdventure(container, {
+            title: `${place.name}的事件`, icon: '🔔', placeName: place.name, roleId, profile,
+            prompt: `【事件】${ev.text}\n你决定深入调查这件事。`,
+            place: { name: place.name, desc: place.desc || '', ambienceText: placeAmbience(place, new Date().getHours()) },
+            charInfo: [
+                `${profile.name}（${((profile.aiProfile?.traits) || []).join('、') || '普通居民'}）`,
+                baseInfo,
+                persona ? `个性登记：${persona}` : ''
+            ].filter(Boolean).join('\n'),
+            placePresets: presetsTxt,
+            placeWorldbook: pc.worldbook || '',
+            saveStoryType: 'event', toast,
+            onExit: () => renderPlace(container, globalState, onBack, roleId, profile, place.key),   // ★ ✕退出 → 重渲染 → 🎭
+            onDone: () => { sessionStorage.removeItem(rk); onReturn && onReturn(); }   // ★ 清文游状态（simCity 侧直接删）
+        }, rk);
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
 
 // ★ 背包（v1：查看 + 赠送 → 好感修正）

@@ -877,7 +877,8 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
                 '2) tags：场景标签数组（世界观、特色，如["fate","圣杯战争"]）。' +
                 '3) desc：一段独立的环境描述语（氛围、风貌，60字内）；同时给出 btn（该地点的简短互动文案，10字内，用于地点主按钮，如"推门而入"、"进店坐坐"、"探访古迹"）。' +
                 '4) ambience：本体的分时段环境语，6个时段key：night（22-5点夜色）、dawn（5-8点清晨）、morning（8-12点上午）、noon（12-14点午后）、day（14-18点白天）、dusk（18-22点傍晚），每段一句40字内的画面感描写，贴合世界观。' +
-                '5) events：本体专属随机事件池，3~5条，每条含 text（事件描述）与可选数值效果 money/mood/energy（-5~10），至少一条带数值效果。' +
+                '5) events：本体专属随机事件池，3~5条，每条含 text（事件描述，建议2~3句、带起因与悬念，别只是一句氛围描写）' +
+                '与可选 type（事件类型：悬疑/委托/奇遇/温情/危机，用于文游叙事引导）、可选数值效果 money/mood/energy（-5~10），至少一条带数值效果。' +
                 '可带 roles（角色名数组，从userContent的角色名单中选）绑定归属：roles 事件的触发者就是该角色本人，' +
                 '所以文本必须用第一人称"你"（触发者视角），不要出现 roles 里的角色名（避免"自己遇见自己"，特殊情况如"他人谈论自己"除外）；' +
                 '可带 tags（角色标签数组，如["fate"]）：任何带该标签的角色行动都可能触发，文本可用氛围描写或点名"某类人"；' +
@@ -888,7 +889,7 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
                 '8) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
                 '9) comment：一段给共建者的评语（庆祝建成，60字内）。' +
                 '10) shops：商店数组（AI 判断该地产/子地点是否有商业属性，有才生成；通常 0~2 个商店）：每个含 name（商店名，将显示为抽屉按钮文案）、icon（emoji）、sub（关联子地点名或"本体"）、items（3~5 个商品：name/icon/desc/price/qty，price 50~5000，qty 1~5，贴合世界观）。' +
-                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","btn":"四处看看","residential":"亭台水榭","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"你在教堂地下密室发现一本写着禁忌咒文的旧书，翻了几页便觉心悸","mood":-2,"roles":["言峰绮礼"]},{"text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","residential":"学生宿舍","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"shops":[{"name":"卫宫家的杂货铺","icon":"🛒","sub":"柳洞寺","items":[{"name":"魔力水晶","icon":"💎","desc":"蕴含魔力的小石头","price":500,"qty":3},{"name":"圣餐面包","icon":"🍞","desc":"教会食堂的松软面包","price":120,"qty":5}]}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
+                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","btn":"四处看看","residential":"亭台水榭","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"type":"悬疑","text":"你在教堂地下密室发现一本写满禁忌咒文的旧书，书页间夹着一张泛黄的照片，背面写着：今晚钟楼见。","mood":-2,"roles":["言峰绮礼"]},{"type":"奇遇","text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视。","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚。","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","residential":"学生宿舍","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"shops":[{"name":"卫宫家的杂货铺","icon":"🛒","sub":"柳洞寺","items":[{"name":"魔力水晶","icon":"💎","desc":"蕴含魔力的小石头","price":500,"qty":3},{"name":"圣餐面包","icon":"🍞","desc":"教会食堂的松软面包","price":120,"qty":5}]}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
             const userContent =
                 `地产目标：${estate.goal}\n` +
                 `规模：${estate.maxProgress} 点（数值越大规模越大）\n` +
@@ -1552,7 +1553,8 @@ async function doAction(container, globalState, onBack, roleId, profile, act, af
         if (simCityEvt.money) profile.money = Math.max(0, profile.money + simCityEvt.money);
         if (simCityEvt.mood) profile.mood = Math.min(100, Math.max(0, profile.mood + simCityEvt.mood));
         if (simCityEvt.energy) profile.energy = Math.min(100, Math.max(0, profile.energy + simCityEvt.energy));
-        if (placeKey) { pendingEvents[placeKey] = { text: simCityEvt.text, at: Date.now() }; savePendingEvents(); }
+        if (placeKey) { pendingEvents[placeKey] = { ...simCityEvt, at: Date.now() }; savePendingEvents(); }
+
         await save();
         toast('🔔 这里似乎发生了什么，看看环境卡右上角', '#ff9800');
     }
@@ -4153,7 +4155,8 @@ function showPendingEvent(container, globalState, onBack, roleId, profile, place
 
         runTextAdventure(container, {
             title: `${place.name}的事件`, icon: '🔔', placeName: place.name, roleId, profile,
-            prompt: `【事件】${ev.text}\n你决定深入调查这件事。`,
+            prompt: `【事件】${ev.text}\n【你的决定】你参与了这件事，无论是被动还是主动，总之，现在你可以自由选择接下来的行动：直接去现场、找人打听、暗中观察、翻阅线索……或是等待。`,
+
             place: { name: place.name, desc: place.desc || '', ambienceText: placeAmbience(place, new Date().getHours()) },
             charInfo: [
                 `${profile.name}（${((profile.aiProfile?.traits) || []).join('、') || '普通居民'}）`,

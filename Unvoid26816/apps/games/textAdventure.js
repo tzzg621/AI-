@@ -1,12 +1,31 @@
 // apps/games/textAdventure.js — 通用文游引擎（整页模式：选项式 + 自由输入 + 页数跳转 + 手动结尾 + 内置设置）
 // 状态存 sessionStorage（会话级：切页/关窗重进不丢，关页自动清）；手动结尾才存回忆录（数据只存一份）
 import { esc } from '../../store/utils.js';
-import { saveProfile, saveStory } from './simCityStore.js';
+import { saveProfile, saveStory, getAdvSession, saveAdvSession, deleteAdvSession } from './simCityStore.js';
 import { taskManager } from '../../store/AITaskManager.js';
 
-function saveAdvState(key, state) { try { sessionStorage.setItem(key, JSON.stringify(state)); } catch (e) { } }
-function loadAdvState(key) { try { const s = sessionStorage.getItem(key); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
-function clearAdvState(key) { try { sessionStorage.removeItem(key); } catch (e) { } }
+// ★ 双写：正文（pages等）→ IndexedDB ；标记 → sessionStorage（同 key 存 '1'，供同步检测🎭）
+async function saveAdvState(key, state) {
+    try { await saveAdvSession({ id: key, ...state }); } catch (e) { }
+    try { sessionStorage.setItem(key, '1'); } catch (e) { }
+}
+async function loadAdvState(key) {
+    try {
+        const adv = await getAdvSession(key);
+        if (adv) return adv;
+        const s = sessionStorage.getItem(key);
+        if (s && s.startsWith('{')) {
+            const st = JSON.parse(s);
+            await saveAdvState(key, st);
+            return st;
+        }
+    } catch (e) { }
+    return null;
+}
+async function clearAdvState(key) {
+    try { await deleteAdvSession(key); } catch (e) { }
+    try { sessionStorage.removeItem(key); } catch (e) { }
+}
 
 // ★ 引擎内置设定（提示词顺序的第 2 层）
 const BUILTIN_PROMPT = '这是"模拟小城"世界：一座由角色们共同生活的虚拟小城。你是这里的居民，拥有自己的身份、性格与日常，言行自然，像真人一样生活。';
@@ -21,7 +40,8 @@ const inflightAdv = new Map();
 export async function runTextAdventure(container, opts, resumeKey) {
     const { roleId, profile } = opts;
     const key = resumeKey || `${opts.roleId}_${opts.placeKey || 'adv'}`;
-    const saved = resumeKey ? loadAdvState(resumeKey) : null;
+    const saved = resumeKey ? await loadAdvState(resumeKey) : null;
+
     const state = saved || {
         title: opts.title || '文游', icon: opts.icon || '🎭', placeName: opts.placeName || '',
         roleId: opts.roleId, prompt: opts.prompt || '', saveStoryType: opts.saveStoryType || '',
@@ -125,10 +145,16 @@ export async function runTextAdventure(container, opts, resumeKey) {
     // ★ 每轮 AI（走任务中心，可看进度）
     const callAI = async (action) => {
         const { callAIWithMessages } = await import('../aiService.js');
-        const systemPrompt = '你是"模拟小城"的文游叙事引擎。基于【场景设定】与【玩家行动】推进剧情。' +
-            '每轮只输出 JSON：{"scene":"当前场景/剧情推进（含对玩家上一轮行动的反馈，1000~2000字，有画面感）","options":[{"text":"下一步行动","hint":"倾向标签，如冒险/回避/谨慎/智取/大胆/细心/观察/讨好","mood":-10~10,"energy":-10~10,"money":-50~50},...],"ended":false/true,"ending":"ended为true时的收尾语（50字内）"}。' +
-            'options 给 3~4 个，覆盖不同倾向（积极/消极/回避/大胆/细心/智取/勇气/谨慎等），不同选择通向不同走向；' +
-            '数值修正代表该选择立即造成的属性变化（无变化写0）；剧情生动自然；不要替玩家做决定；不要自行收尾（由玩家手动结束）。只输出 JSON 对象本身。';
+        const systemPrompt = '你是"模拟小城"的文游叙事引擎。基于【场景设定】与【玩家行动】推进剧情，追求故事性：\n' +
+            '1) 开场必须有"钩子"：悬念、异常、冲突或画面感，让玩家立刻想往下走；\n' +
+            '2) 每轮 scene 至少包含：环境细节 + 人物反应 + 悬念推进，避免平铺直叙；\n' +
+            '3) 剧情要有起伏：玩家调查 2~3 轮后安排一次"发现/意外"（新线索、新角色出现、事件反转），别让剧情原地打转；\n' +
+            '4) 这是你一个人的经历，重在个人抉择与代价：每个选择都该有分量，可能影响后续事件与关系；\n' +
+            '5) 选项要指向不同线索与方向（现场调查/找人或物/暗中观察/冒险直闯/谨慎撤退等），而不只是性格倾向；\n' +
+            '6) 不要替玩家做决定，不要自行收尾（由玩家手动结束）。\n' +
+            '每轮只输出 JSON：{"scene":"当前场景/剧情推进（1000~2000字，有画面感）","options":[{"text":"下一步行动","hint":"倾向标签，如冒险/回避/谨慎/智取/大胆/细心/观察/讨好","mood":-10~10,"energy":-10~10,"money":-50~50},...],"ended":false/true,"ending":"ended为true时的收尾语（50字内）"}。' +
+            'options 给 3~4 个，覆盖不同倾向且指向不同线索；数值修正代表该选择立即造成的属性变化（无变化写0）；只输出 JSON 对象本身。';
+
         // ★ 提示词顺序：外部世界书 → 引擎内置 → 地点预设（勾选） → 角色详情 → 地点世界书 → 环境描述 → 文游历史
         const parts = [];
         if (state.worldbookText) parts.push(`【世界书】\n${state.worldbookText}`);
@@ -137,6 +163,7 @@ export async function runTextAdventure(container, opts, resumeKey) {
         if (state.charInfo) parts.push(`【角色】\n${state.charInfo}`);
         if (state.placeWorldbook) parts.push(`【地点世界书】\n${state.placeWorldbook}`);
         if (state.envInfo) parts.push(`【当前环境】\n${state.envInfo}`);
+        if (state.prompt) parts.push(`【事件背景】\n${state.prompt}`);   // ★ 补上：事件文本+你的决定 真正进文游
         if (state.pages.length) parts.push(`【剧情历史】\n${state.pages.map((p, i) => `${i + 1}. ${p.action ? '行动：' + p.action + (p.hint ? `（${p.hint}）` : '') + '\n' : ''}${p.text}`).join('\n\n')}`);
         parts.push(action ? `【玩家行动】\n${action}` : '【开始】生成开场场景。');
         parts.push('请推进剧情。');
@@ -153,8 +180,8 @@ export async function runTextAdventure(container, opts, resumeKey) {
         if (!overlay.isConnected) return;
         const roundId = Date.now().toString(36) + Math.random().toString(36).substr(2, 4);
         state.pending = { action: typeof action === 'string' ? action : (action && action.text) || '', hint: (typeof action === 'object' && action && action.hint) || '', mod: (typeof action === 'object' && action) ? action : null, roundId };
-        saveAdvState(key, state);
-        renderPage(state.pages.length);   // 显示"⏳生成中…"
+        await saveAdvState(key, state);
+        renderPage(state.pages.length);   // 显示"⏳生成中…"        
         try {
             const optMod = (typeof action === 'object' && action) ? action : null;
             if (optMod) await applyMod(optMod);
@@ -168,21 +195,21 @@ export async function runTextAdventure(container, opts, resumeKey) {
                 if (inflightAdv.get(key)?.roundId === roundId) inflightAdv.delete(key);   // ★ 完成/失败即注销
             }
             // ★ 落库前校验：自己仍是"当前挂起轮"才提交；被新实例接管则放弃
-            const latest = loadAdvState(key);
+            const latest = await loadAdvState(key);
             if (!latest || !latest.pending || latest.pending.roundId !== roundId) return;
             state.pending = null;
             state.pages.push({ action: actionText, hint: (optMod && optMod.hint) || '', text: (res.scene || '……') + (res.ending ? '\n\n—— ' + res.ending : '') });
             state.rounds++;
             state.options = res.options || [];
-            saveAdvState(key, state);
-            if (!overlay.isConnected) return;   // 切走了：已落库，恢复时直接看新页，不再重复生成
+            await saveAdvState(key, state);
+            if (!overlay.isConnected) return;
             renderPage(state.pages.length - 1);
         } catch (e) {
-            const latest = loadAdvState(key);
+            const latest = await loadAdvState(key);
             if (!latest || !latest.pending || latest.pending.roundId !== roundId) return;
             state.pending = null;
             state.pages.push({ action: (action && (action.text || action)) || '', text: '❌ ' + (e.message || '生成中断，可重试') });
-            saveAdvState(key, state);
+            await saveAdvState(key, state);
             if (!overlay.isConnected) return;
             renderPage(state.pages.length - 1);
         }
@@ -190,7 +217,7 @@ export async function runTextAdventure(container, opts, resumeKey) {
 
 
     // ★ 内置设置：加载外部世界书 + 注入选项
-    const showAdvSettings = () => {
+    const showAdvSettings = async () => {   // ★ 改 async
         if (state.ended) return;   // ★ 只拦"已结束"，生成中也能开设置
         const setOverlay = document.createElement('div');
         setOverlay.className = 'simcity-pop';
@@ -220,12 +247,12 @@ export async function runTextAdventure(container, opts, resumeKey) {
                 </div>
             </div>`;
         container.appendChild(setOverlay);
-        setOverlay.querySelector('#wbApply').addEventListener('click', () => {
+        setOverlay.querySelector('#wbApply').addEventListener('click', async () => {
             const ids = [...setOverlay.querySelectorAll('[data-wb]:checked')].map(c => c.dataset.wb);
             state.worldbookIds = ids;
             state.worldbookText = wb.filter(e => ids.includes(e.id)).map(e => `- 【${e.title}】${e.text}`).join('\n');
             state.usePresets = setOverlay.querySelector('#wbUsePresets').checked;
-            saveAdvState(key, state);
+            await saveAdvState(key, state);
             notify('⚙️ 世界书已应用');
             setOverlay.remove();
         });
@@ -237,7 +264,7 @@ export async function runTextAdventure(container, opts, resumeKey) {
     const endAdv = async () => {
         if (state.ended || state.pending) return;
         state.ended = true;
-        saveAdvState(key, state);
+        await saveAdvState(key, state);
         overlay.querySelector('#advEnd').textContent = '⏳ 收尾中…';
         try {
             const { callAIWithMessages } = await import('../aiService.js');
@@ -257,7 +284,7 @@ export async function runTextAdventure(container, opts, resumeKey) {
                     timestamp: Date.now()
                 });
             }
-            clearAdvState(key);
+            await clearAdvState(key);
             notify(`📖 「${state.title}」已存入回忆录`);
         } catch (e) { notify('❌ 收尾失败，已保存当前进度'); }
         overlay.remove();
@@ -297,9 +324,9 @@ export async function runTextAdventure(container, opts, resumeKey) {
                 // ★ 上一次请求仍在飞：不重发，等它完成落库后刷新
                 sceneEl.textContent = '⏳ 生成中…（上一次请求仍在进行，等待完成…）';
                 optsEl.innerHTML = '';
-                const refresh = () => {
+                const refresh = async () => {   // ★ 改 async
                     if (!overlay.isConnected) return;
-                    const latest = loadAdvState(key);
+                    const latest = await loadAdvState(key);
                     if (latest) { Object.assign(state, latest); renderPage(state.pages.length - 1); }
                 };
                 inflight.promise.then(refresh, refresh);

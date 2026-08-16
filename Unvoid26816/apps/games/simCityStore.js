@@ -2,11 +2,12 @@
 // DB: simCityDB / store: profiles（key=角色id）+ stories（key=剧情id）
 
 const DB_NAME = 'simCityDB';
-const DB_VERSION = 5;   // ★ 升到 5：新增 adventures store（一个文游一个 key）
+const DB_VERSION = 6;   // ★ 升到 6：新增 adv_sessions（弹窗式文游会话，与内嵌文游 adventures 隔离）
 const STORE_PROFILES = 'profiles';
 const STORE_STORIES = 'stories';
 const STORE_CHATS = 'chats';
 const STORE_ADVENTURES = 'adventures';
+const STORE_ADV_SESSIONS = 'adv_sessions';
 
 let dbPromise = null;
 
@@ -24,6 +25,7 @@ function openDB() {
                 e.target.transaction.objectStore(STORE_CHATS).clear();
             }
             if (!db.objectStoreNames.contains(STORE_ADVENTURES)) db.createObjectStore(STORE_ADVENTURES);   // ★ v4→v5：文游全文（一 key 一文游）
+            if (!db.objectStoreNames.contains(STORE_ADV_SESSIONS)) db.createObjectStore(STORE_ADV_SESSIONS);   // ★ v5→v6：弹窗式文游会话
         };
         req.onsuccess = (e) => resolve(e.target.result);
         req.onerror = (e) => reject(e.target.error);
@@ -594,6 +596,36 @@ export async function saveSimCityAdventures(registry) {
     return new Promise((resolve) => {
         const tx = db.transaction(STORE_CHATS, 'readwrite');
         tx.objectStore(STORE_CHATS).put(registry, SIMCITY_ADVENTURES_KEY);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+    });
+}
+
+// ---- 弹窗式文游会话（一 key 一状态；与内嵌文游 adventures store 完全隔离）----
+export async function getAdvSession(key) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_ADV_SESSIONS, 'readonly');
+        const req = tx.objectStore(STORE_ADV_SESSIONS).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+    });
+}
+export async function saveAdvSession(session) {
+    if (!session || !session.id) return false;
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_ADV_SESSIONS, 'readwrite');
+        tx.objectStore(STORE_ADV_SESSIONS).put(session, session.id);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+    });
+}
+export async function deleteAdvSession(key) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+        const tx = db.transaction(STORE_ADV_SESSIONS, 'readwrite');
+        tx.objectStore(STORE_ADV_SESSIONS).delete(key);
         tx.oncomplete = () => resolve(true);
         tx.onerror = () => resolve(false);
     });

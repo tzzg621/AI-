@@ -9,7 +9,7 @@ import {
     getAllProfiles, getPresentAt, chatPairKey, getChatMessages, saveChatMessage, getAllChats, deleteChatMessages, deleteTempChats, getSimCityRelations, saveSimCityRelations,
     getSimCityWorld, saveSimCityWorld, getSimCityPlaceConfig, saveSimCityPlaceConfig, getPersonaTemplates, savePersonaTemplates, getSimCityEstates, saveSimCityEstates, getGroupChatMessages, getGroupRegistry, saveGroupRegistry,
     getAdventure, saveAdventure, getAllAdventures, getSimCityAdventures, saveSimCityAdventures, getSimCityShops, saveSimCityShops,
-    getSimCityBulletins, saveSimCityBulletins,
+    getSimCityBulletins, saveSimCityBulletins, getSimCityResidentials, saveSimCityResidentials,
     getSimCitySettings, saveSimCitySettings
 } from './simCityStore.js';
 import { taskManager } from '../../store/AITaskManager.js';
@@ -41,6 +41,7 @@ let simCitySettings = null;   // ★ 全局设置（historyCount：AI对话记�
 let simCityShops = {};   // ★ 商店表（shopId → { name, icon, items }；地点只存 shopId 引用）
 let shopInjectedKeys = new Set();   // ★ 货架已注入的对话键（每会话一次，防重复）
 let simCityBulletins = {};   // ★ 公告牌（placeKey → [{ type, text, at }]）
+let simCityResidentials = {};   // ★ 住宅区详情（placeKey → { name, houses }；地点只带 residential 名字字段）
 
 // ★ 对话购买语境词表（B' 触发：上一轮文本命中 + 当前地点有商店 → 本轮注入货架）
 const SHOP_TRIGGER_WORDS = ['买', '购买', '想喝', '想尝', '来一杯', '来一份', '来点', '买点', '买些', '逛逛', '购物', '咖啡', '茶', '酒', '零食', '点心', '商品', '货架'];
@@ -316,6 +317,13 @@ export async function start(container, globalState, onBack) {
     await loadAdventures();   // ★ 文游注册表 + 全文缓存
     // ★ 地产建设进度结算（纯内存）：所在地=地产名的共建者每小时 +20
     if (settleEstateProgressFrom(simCityEstates.estates || [], placeIndex)) await saveEstates();
+    // ★ 住宅区初始化：静态地点 + 建成地产（有 residential 的）补默认房型
+    simCityResidentials = await getSimCityResidentials().catch(() => null) || {};
+    let resChanged = false;
+    for (const p of PLACES) if (p.residential && !simCityResidentials[p.key]) { simCityResidentials[p.key] = { name: p.residential, houses: [{ ...DEFAULT_HOUSE }] }; resChanged = true; }
+    for (const e of (simCityEstates?.estates || [])) if (e.status === 'built' && e.residential && !simCityResidentials[e.id]) { simCityResidentials[e.id] = { name: e.residential, houses: [{ ...DEFAULT_HOUSE }] }; resChanged = true; }
+    for (const e of (simCityEstates?.estates || [])) if (e.status === 'built') for (const s of (e.subs || [])) if (s.residential && !simCityResidentials[s.key]) { simCityResidentials[s.key] = { name: s.residential, houses: [{ ...DEFAULT_HOUSE }] }; resChanged = true; }   // ★ 子地点住宅区
+    if (resChanged) await saveSimCityResidentials(simCityResidentials).catch(() => { });
     if (simCityRelations && settleRelationsFrom(allProfiles, placeIndex, simCityRelations)) await saveSimCityRelations(simCityRelations).catch(() => { });
     await cleanupStaleTempChats();
     const back = () => { simCityCtx = null; onBack && onBack(); };
@@ -860,11 +868,13 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
                 '所以文本必须用第一人称"你"（触发者视角），不要出现 roles 里的角色名（避免"自己遇见自己"，特殊情况如"他人谈论自己"除外）；' +
                 '可带 tags（角色标签数组，如["fate"]）：任何带该标签的角色行动都可能触发，文本可用氛围描写或点名"某类人"；' +
                 '不带 roles/tags 为通用事件兜底，至少留 1 条。' +
-                '6) subs：相关子地点数组，2~4个，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么，如"参拜/静思"，作为行为事件）、btn（简短互动文案，10字内，用于按钮显示，如"进寺参拜"，与 act 不同）、desc（简述），并可带 ambience（6段）与 events（2~4条），格式同本体。' +
-                '7) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
-                '8) comment：一段给共建者的评语（庆祝建成，60字内）。' +
-                '9) shops：商店数组（AI 判断该地产/子地点是否有商业属性，有才生成；通常 0~2 个商店）：每个含 name（商店名，将显示为抽屉按钮文案）、icon（emoji）、sub（关联子地点名或"本体"）、items（3~5 个商品：name/icon/desc/price/qty，price 50~5000，qty 1~5，贴合世界观）。' +
-                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","btn":"四处看看","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"你在教堂地下密室发现一本写着禁忌咒文的旧书，翻了几页便觉心悸","mood":-2,"roles":["言峰绮礼"]},{"text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"shops":[{"name":"卫宫家的杂货铺","icon":"🛒","sub":"柳洞寺","items":[{"name":"魔力水晶","icon":"💎","desc":"蕴含魔力的小石头","price":500,"qty":3},{"name":"圣餐面包","icon":"🍞","desc":"教会食堂的松软面包","price":120,"qty":5}]}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
+                '6) residential（可选）：若该地产内设有住宅区（可购买住房），给出住宅区名字（如"教职工宿舍"、"学生公寓"）；没有住宅区则不输出该字段。' +
+                '7) subs：相关子地点数组，2~4个，每个含 name（子地点名，避免使用"-"或"·"字符）、icon（emoji，可选）、act（可做什么，如"参拜/静思"，作为行为事件）、btn（简短互动文案，10字内，用于按钮显示，如"进寺参拜"，与 act 不同）、desc（简述），并可带 ambience（6段）与 events（2~4条），格式同本体。' +
+                '每个子地点也可带 residential（该子地点若有住宅区，给住宅区名，可选）' +
+                '8) jobs：相应职业数组，1~3个，每个含 name、desc、requireSkills、quota（岗位上限1~6）、sub（建议一半以上职业关联到子地点，填子地点名即可，如"柳洞寺"，不带父级前缀）...' +
+                '9) comment：一段给共建者的评语（庆祝建成，60字内）。' +
+                '10) shops：商店数组（AI 判断该地产/子地点是否有商业属性，有才生成；通常 0~2 个商店）：每个含 name（商店名，将显示为抽屉按钮文案）、icon（emoji）、sub（关联子地点名或"本体"）、items（3~5 个商品：name/icon/desc/price/qty，price 50~5000，qty 1~5，贴合世界观）。' +
+                '只输出JSON：{"name":"冬木市","tags":["fate","圣杯战争"],"desc":"...","btn":"四处看看","residential":"亭台水榭","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"你在教堂地下密室发现一本写着禁忌咒文的旧书，翻了几页便觉心悸","mood":-2,"roles":["言峰绮礼"]},{"text":"你感到空气中弥漫着淡淡的魔力，仿佛有人在暗中窥视","mood":1,"tags":["fate"]},{"text":"募捐箱里的零钱被风吹了一地，你顺手捡起几枚","money":5}],"subs":[{"name":"柳洞寺","icon":"⛩️","act":"参拜/静思","desc":"...","residential":"学生宿舍","ambience":{"night":"...","dawn":"...","morning":"...","noon":"...","day":"...","dusk":"..."},"events":[{"text":"...","mood":2}]},{"name":"教会","icon":"⛪","act":"祈祷/咨询","desc":"..."}],"shops":[{"name":"卫宫家的杂货铺","icon":"🛒","sub":"柳洞寺","items":[{"name":"魔力水晶","icon":"💎","desc":"蕴含魔力的小石头","price":500,"qty":3},{"name":"圣餐面包","icon":"🍞","desc":"教会食堂的松软面包","price":120,"qty":5}]}],"jobs":[{"name":"圣杯战争观察员","desc":"...","requireSkills":["魔术"],"quota":3,"sub":"柳洞寺"},{"name":"教会司祭","desc":"...","requireSkills":[],"quota":2,"sub":"教会"}],"comment":"..."}，不要任何其他文字。';
             const userContent =
                 `地产目标：${estate.goal}\n` +
                 `规模：${estate.maxProgress} 点（数值越大规模越大）\n` +
@@ -885,6 +895,7 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
         estate.tags = Array.isArray(verdict.tags) ? verdict.tags : [estate.goal];
         estate.desc = String(verdict.desc || '');
         estate.btn = String(verdict.btn || '').trim().slice(0, 10) || '开始互动';
+        estate.residential = String(verdict.residential || '').trim().slice(0, 12);
         estate.ambience = sanitizeAmbience(verdict.ambience);
         estate.events = sanitizeEvents(verdict.events);
         // ★ 商店：生成 shopId → 存商店表 → 地点只存引用（estate.shopId / subs[i].shopId）
@@ -910,6 +921,7 @@ async function transformEstate(container, globalState, onBack, roleId, profile, 
             act: String(s.act || ''),
             desc: String(s.desc || ''),
             btn: String(s.btn || '').trim().slice(0, 10) || '进入',
+            residential: String(s.residential || '').trim().slice(0, 12),
             ambience: sanitizeAmbience(s.ambience),
             events: sanitizeEvents(s.events)
         }));
@@ -1014,7 +1026,7 @@ const PLACES = [
     { key: 'fun', name: '游乐场', icon: '🎡', image: '', act: 'fun', desc: '娱乐提升心情' },
     { key: 'bank', name: '银行', icon: '🏦', image: '', act: 'bank', desc: '存取金币' },
     { key: 'gallery', name: '画廊', icon: '🖼️', image: '', act: 'gallery', desc: '欣赏画作' },
-    { key: 'mall', name: '商业街', icon: '🏬', image: '', act: 'shop', desc: '逛街淘货' },
+    { key: 'mall', name: '商业街', icon: '🏬', image: '', act: 'shop', desc: '逛街淘货', residential: '商业街' },
     { key: 'entertain', name: '娱乐街', icon: '🎪', image: '', act: 'fun', desc: '娱乐放松' },
     { key: 'school', name: '学校', icon: '🏫', image: '', act: 'study', desc: '学习充电' },
     // ★ 子地点：与普通地点同构，多一个 parent 字段；不进地图，从上级地点卡片进入
@@ -1051,6 +1063,9 @@ const childrenOf = key => {
 };
 // 任意地点查找（含子地点）
 const findPlace = key => getPlace(key) || PLACES[0];
+
+// ★ 默认房型（住宅区第一版统一；动态地产生成时后续优化）
+const DEFAULT_HOUSE = { type: 'default', name: '标准住宅', icon: '🏠', price: 800, desc: '温馨的标准居所', template: 'apartment' };
 
 // 房子模板：全局静态配置，房产实例只存 template key（不复制模板）
 const HOUSE_TEMPLATES = {
@@ -1252,6 +1267,53 @@ function bindJobsToggle(container) {
     toggle.addEventListener('click', () => {
         const list = toggle.nextElementSibling;
         const arrow = toggle.querySelector('.jobs-arrow');
+        const open = list.style.display !== 'none';
+        list.style.display = open ? 'none' : 'block';
+        arrow.textContent = open ? '▾' : '▴';
+    });
+}
+
+// ★ 住宅区折叠区（该地点可居住时显示；职位下方）
+function residentialCollapseHtml(place, profile) {
+    if (!place.residential) return '';
+    const res = simCityResidentials[place.key] || { name: place.residential, houses: [{ ...DEFAULT_HOUSE }] };
+    const residents = res.residents || [];
+    const mine = residents.filter(r => r.roleId === profile.id);
+    const others = residents.filter(r => r.roleId !== profile.id && getIntimacy(profile.id, r.roleId) >= 41);
+    const visible = [...mine, ...others];
+    const buyable = res.houses && res.houses.length;
+    return `
+        <div style="margin-top:12px;">
+            <div id="resToggle" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:rgba(255,255,255,0.9);border-radius:14px;cursor:pointer;box-shadow:0 1px 6px rgba(0,0,0,0.06);">
+                <span style="font-size:13px;font-weight:600;color:#8d6e63;">🏘️ ${esc(res.name)}${visible.length ? ` · 住户 ${visible.length} 户` : ''}</span>
+                <span class="res-arrow" style="font-size:12px;color:#bcaaa4;">▾</span>
+            </div>
+            <div class="res-list" style="display:none;margin-top:8px;">
+                ${buyable ? `<div class="simcity-room">
+                    ${(res.houses || []).map(h => `
+                        <div class="simcity-item res-house" data-house="${esc(h.name)}">
+                            <div class="item-name">${h.icon || '🏠'} ${esc(h.name)}</div>
+                            <div class="item-desc">💰${h.price} · ${esc(h.desc)} · 点击购买</div>
+                        </div>`).join('')}
+                </div>` : ''}
+                ${visible.length ? `<div class="simcity-room" style="margin-top:8px;">
+                    ${visible.map(r => `
+                        <div class="simcity-item res-home" data-prop="${esc(r.propId)}">
+                            <div class="item-name">🏠 ${esc(r.address || res.name)}</div>
+                            <div class="item-desc">${r.roleId === profile.id ? '我的家 · 点击进入' : `${esc(r.name)}的家 · 点击进入`}</div>
+                        </div>`).join('')}
+                </div>` : ''}
+                ${!buyable && !visible.length ? '<div style="text-align:center;color:#999;padding:10px 0;font-size:12px;">这里还没有住户</div>' : ''}
+            </div>
+        </div>`;
+}
+
+function bindResidentialToggle(container) {
+    const toggle = container.querySelector('#resToggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', () => {
+        const list = toggle.nextElementSibling;
+        const arrow = toggle.querySelector('.res-arrow');
         const open = list.style.display !== 'none';
         list.style.display = open ? 'none' : 'block';
         arrow.textContent = open ? '▾' : '▴';
@@ -1504,6 +1566,30 @@ function presentSectionHtml(placeName, roleId) {
                     <button class="sc-btn chat sc-chat" data-friend="${esc(id)}" data-place="${esc(placeName)}">对话</button>
                 </div>`).join('')}
         </div>`;
+}
+
+// ★ 公告牌：地点记录事件（每地点保留最近 30 条；type: action|chat|adventure|shop|move|build；防抖写库）
+function addBulletin(placeKey, type, text) {
+    if (!placeKey || !text) return;
+    simCityBulletins = simCityBulletins || {};
+    const list = simCityBulletins[placeKey] = simCityBulletins[placeKey] || [];
+    list.push({ type, text: String(text).slice(0, 60), at: Date.now() });
+    if (list.length > 30) list.splice(0, list.length - 30);
+    clearTimeout(addBulletin._t);
+    addBulletin._t = setTimeout(() => { saveSimCityBulletins(simCityBulletins).catch(() => { }); }, 800);
+}
+
+// ★ 地点名 → placeKey（静态 PLACES / 动态地产本体 / 子地点全名）
+function placeKeyFromName(name) {
+    if (!name) return null;
+    const sp = PLACES.find(p => p.name === name || (p.aliases || []).includes(name));
+    if (sp) return sp.key;
+    for (const e of (simCityEstates?.estates || [])) {
+        if (e.name === name) return e.id;
+        const s = (e.subs || []).find(x => x.name === name);
+        if (s) return s.key;
+    }
+    return null;
 }
 
 // ★ 动态地产配置：由 placeKey 定位建成地产的本体/子地点（ambience 分时段环境语 + events 地点事件池）
@@ -2133,16 +2219,31 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
                         <div class="env-desc">${esc(place.desc || placeAmbience(place, hour))}</div>
                         ${!PLACES.some(p => p.key === placeKey) && place.desc ? (() => { const t = placeAmbience(place, hour); return t ? `<div class="env-now" style="font-size:11px;color:#8a7fa8;margin-top:4px;">${esc(t)}</div>` : ''; })() : ''}
                     </div>
+                ${place.key === 'square' ? (() => {
+            const evs = (simCityWorld?.events || []).slice().sort((a, b) => (b.heat || 1) - (a.heat || 1) || b.ts - a.ts);
+            const tname = { rumor: '流言', gossip: '传闻', news: '新闻' };
+            return `<div style="background:var(--sc-card);border:1px solid rgba(255,255,255,0.7);border-radius:18px;padding:14px;margin-bottom:12px;box-shadow:var(--sc-shadow);">
+                        <div style="font-weight:700;font-size:14px;margin-bottom:6px;">📢 广场传言</div>
+                        ${evs.length ? evs.map(e => `
+                            <div style="display:flex;gap:8px;padding:7px 0;border-bottom:1px solid #f5f5f5;font-size:12px;line-height:1.6;align-items:flex-start;">
+                                <span style="font-size:16px;flex-shrink:0;">${EVENT_ICON[e.type] || '💬'}</span>
+                                <div style="flex:1;min-width:0;">
+                                    <div style="color:#5a5470;">${esc(e.text)}</div>
+                                    <div style="font-size:11px;color:#bbb;margin-top:2px;">${tname[e.type] || ''}${e.place ? ' · ' + esc(e.place) : ''} · ${new Date(e.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</div>
+                                </div>
+                            </div>`).join('') : '<div style="text-align:center;color:#999;padding:10px 0;font-size:12px;">广场上还没有传言流传</div>'}
+                    </div>`;
+        })() : ''}
                 ${advSectionHtml(place.key, roleId)}
                 ${children.map(c => {
-        const cOpen = venueOpen(c.key, hour);
-        return `
+            const cOpen = venueOpen(c.key, hour);
+            return `
                         <div class="simcity-item sub-place" data-sub="${esc(c.key)}" style="${cOpen ? '' : 'opacity:0.5;'}">
                             <div class="item-icon">${c.icon}</div>
                             <div class="item-name">${esc(subDisplayName(c.name))}</div>
                             <div class="item-desc">${cOpen ? '进入' : '🌙 已打烊'}</div>
                         </div>`;
-    }).join('')}
+        }).join('')}
                     ${place.key === 'fun' ? FUN_RIDES.map(r => `
                     <div class="simcity-item fun-ride" data-ride="${r.key}" style="${open ? '' : 'opacity:0.5;'}">
                         <div class="item-icon">${r.icon}</div>
@@ -2158,6 +2259,7 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
                     <div class="item-desc">${open ? '点击开始今天的工作' : '🌙 已打烊'}</div>
                 </div>` : ''}
                 ${jobsCollapseHtml(jobsHere, profile)}
+                ${residentialCollapseHtml(place, profile)}
                 ${advHistoryCollapseHtml(place.key, roleId)}
                 ${open
             ? presentSectionHtml(place.name, roleId)
@@ -2270,6 +2372,31 @@ async function renderPlace(container, globalState, onBack, roleId, profile, plac
         });
     });
     bindJobsToggle(container);
+    bindResidentialToggle(container);
+    container.querySelectorAll('.res-house').forEach(card => {
+        card.addEventListener('click', () => {
+            if (!open) { toast(`🌙 ${place.name}还没开门`, '#ff9800'); return; }
+            buyHouse(profile, roleId, place, card.dataset.house);
+        });
+    });
+    container.querySelectorAll('.res-home').forEach(card => {
+        card.addEventListener('click', async () => {
+            const entry = (simCityResidentials[place.key]?.residents || []).find(r => r.propId === card.dataset.prop);   // ★ renderSubPlace 处用 sub.key
+            if (!entry) return;
+            const backTo = () => renderPlace(container, globalState, onBack, roleId, profile, place.key);   // ★ renderSubPlace：() => renderSubPlace(container, globalState, onBack, roleId, profile, sub)
+            if (entry.roleId === profile.id) {
+                // ★ 自己的房子：主视角档案引用 → 装修/休息保存直接生效
+                const myProp = (profile.properties || []).find(p => p.id === entry.propId);
+                if (myProp) renderPropertyPage(container, globalState, onBack, roleId, profile, myProp, backTo);
+            } else {
+                // ★ 别人的房子：只读参观
+                const ownerPf = await getProfile(entry.roleId).catch(() => null);
+                const prop = (ownerPf?.properties || []).find(p => p.id === entry.propId);
+                if (prop) renderPropertyPage(container, globalState, onBack, roleId, profile, prop, backTo, true);
+            }
+        });
+    });
+
     bindAdvHistToggle(container, roleId);
 
     // ★ 子地点卡片：进入子地点页面
@@ -2341,6 +2468,7 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
                     <div class="item-desc">${open ? '点击开始今天的工作' : '🌙 已打烊'}</div>
                 </div>` : ''}
                 ${jobsCollapseHtml(jobsHere, profile)}
+                ${residentialCollapseHtml(sub, profile)}
                 ${advHistoryCollapseHtml(sub.key, roleId)}
                 ${open
             ? presentSectionHtml(sub.name, roleId)
@@ -2436,6 +2564,31 @@ async function renderSubPlace(container, globalState, onBack, roleId, profile, s
         });
     });
     bindJobsToggle(container);
+    bindResidentialToggle(container);
+    container.querySelectorAll('.res-house').forEach(card => {
+        card.addEventListener('click', () => {
+            if (!open) { toast(`🌙 ${subDisplayName(sub.name)}还没开门`, '#ff9800'); return; }
+            buyHouse(profile, roleId, sub, card.dataset.house);
+        });
+    });
+    container.querySelectorAll('.res-home').forEach(card => {
+        card.addEventListener('click', async () => {
+            const entry = (simCityResidentials[sub.key]?.residents || []).find(r => r.propId === card.dataset.prop);   // ★ renderSubPlace 处用 sub.key
+            if (!entry) return;
+            const backTo = () => renderSubPlace(container, globalState, onBack, roleId, profile, sub);   // ★ renderSubPlace：() => renderSubPlace(container, globalState, onBack, roleId, profile, sub)
+            if (entry.roleId === profile.id) {
+                // ★ 自己的房子：主视角档案引用 → 装修/休息保存直接生效
+                const myProp = (profile.properties || []).find(p => p.id === entry.propId);
+                if (myProp) renderPropertyPage(container, globalState, onBack, roleId, profile, myProp, backTo);
+            } else {
+                // ★ 别人的房子：只读参观
+                const ownerPf = await getProfile(entry.roleId).catch(() => null);
+                const prop = (ownerPf?.properties || []).find(p => p.id === entry.propId);
+                if (prop) renderPropertyPage(container, globalState, onBack, roleId, profile, prop, backTo, true);
+            }
+        });
+    });
+
     bindAdvHistToggle(container, roleId);
 
     container.querySelectorAll('.sc-encounter').forEach(btn => {
@@ -3336,7 +3489,7 @@ function showAgencyBuy(container, globalState, onBack, roleId, profile) {
 }
 
 // 房产页面：室内视角（房产页本身即毛坯间；环境描述 + 休息 + 房间网格）
-function renderPropertyPage(container, globalState, onBack, roleId, profile, prop) {
+function renderPropertyPage(container, globalState, onBack, roleId, profile, prop, returnTo, readonly) {
     const t = HOUSE_TEMPLATES[prop.template] || HOUSE_TEMPLATES.default;
     const isDefault = prop.template === 'default';
     // ★ 旧数据兼容：无 home → 兜底生成毛坯根空间（size=模板 space）
@@ -3354,11 +3507,12 @@ function renderPropertyPage(container, globalState, onBack, roleId, profile, pro
                 <div style="font-size:13px;font-weight:600;color:#5a5470;">${esc(r.name)}</div>
                 ${r.status === 'building' ? '<div style="font-size:10px;color:#ff9800;">施工中</div>' : ''}
             </div>`).join('')}
+            ${readonly ? '' : `
             <div class="room-card" id="propAddRoom" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:20px 8px;border-radius:16px;background:rgba(124,77,255,0.04);border:1.5px dashed rgba(124,77,255,0.35);cursor:pointer;">
                 <div style="font-size:24px;line-height:1;">＋</div>
                 <div style="font-size:12px;color:#9c6bff;">打造新房间</div>
                 <div style="font-size:10px;color:#999;">剩余 ${left} 格</div>
-            </div>
+            </div>`}
         </div>`;
 
     container.innerHTML = `
@@ -3369,47 +3523,50 @@ function renderPropertyPage(container, globalState, onBack, roleId, profile, pro
                 <span class="level">${esc(t.area)}</span>
             </div>
             <div class="simcity-body">
-                ${isDefault ? `
+                ${isDefault ? (readonly ? '' : `
                 <div class="simcity-room">
                     <div class="simcity-item" id="propRest">
                         <div class="item-icon">${t.icon}</div>
                         <div class="item-name">${esc(prop.name || t.name)}</div>
                         <div class="item-desc">${esc(t.desc)}</div>
                     </div>
-                </div>` : `
+                </div>`) : `
+                
                 <!-- ★ 环境描述区（房产页本身即毛坯间） -->
                 <div class="simcity-env" style="background:linear-gradient(135deg,rgba(255,255,255,0.85),rgba(239,233,255,0.85));border-radius:18px;padding:16px;margin-bottom:12px;">
                     <div style="font-size:28px;">${t.icon}</div>
                     <div style="font-size:15px;font-weight:700;color:#2d2d3a;margin-top:6px;">${esc(prop.name || t.name)}</div>
                     <div style="font-size:12px;color:#5a5470;margin-top:4px;line-height:1.6;">${esc(t.desc)}${home.size ? ` · 室内空间 ${home.size} 格，已规划 ${used}，剩余 ${left}` : ''}</div>
+                    ${prop.address ? `<div style="font-size:12px;color:#8a7fa8;margin-top:4px;">📍 ${esc(prop.address)}${profile.home === prop.id ? ' · 🏠我的主宅' : ''}</div>` : ''}
                     <div style="height:6px;border-radius:3px;background:rgba(124,77,255,0.12);overflow:hidden;margin-top:10px;">
                         <div style="height:100%;width:${home.size ? Math.min(100, Math.round(used / home.size * 100)) : 0}%;background:linear-gradient(90deg,#7c4dff,#9c6bff);border-radius:3px;"></div>
                     </div>
                 </div>
                 <!-- ★ 毛坯间里休息（房产页本身即毛坯间） -->
+                ${readonly ? '' : `
                 <div class="simcity-room">
                     <div class="simcity-item" id="propRest">
                         <div class="item-icon">🛏️</div>
                         <div class="item-name">休息</div>
                         <div class="item-desc">在${esc(prop.name || t.name)}里小憩，恢复能量</div>
                     </div>
-                </div>
+                </div>`}
                 <!-- ★ 房间网格（一行两个） -->
                 ${roomGrid}
                 <div style="font-size:12px;color:#999;text-align:center;margin-top:12px;">🛋️ 家具布置系统开发中…</div>
                 `}
             </div>
         </div>`;
-    container.querySelector('#propBack').addEventListener('click', () => renderHome(container, globalState, onBack, roleId, profile));
+    container.querySelector('#propBack').addEventListener('click', () => returnTo ? returnTo() : renderHome(container, globalState, onBack, roleId, profile));
     // ★ 休息入口（default 和 毛坯间 都绑）
-    container.querySelector('#propRest').addEventListener('click', () => doAction(container, globalState, onBack, roleId, profile, 'rest', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop), 'home'));
+    container.querySelector('#propRest').addEventListener('click', () => doAction(container, globalState, onBack, roleId, profile, 'rest', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop, returnTo), 'home'));
     if (!isDefault) {
-        container.querySelector('#propAddRoom').addEventListener('click', () => showBuildRoom(container, globalState, onBack, roleId, profile, prop));
+        container.querySelector('#propAddRoom').addEventListener('click', () => showBuildRoom(container, globalState, onBack, roleId, profile, prop, returnTo));
         // ★ 打造的房间可点击进入
         container.querySelectorAll('[data-room]').forEach(el => {
             el.addEventListener('click', () => {
                 const room = (home.rooms || []).find(x => x.id === el.dataset.room);
-                if (room) renderRoomPage(container, globalState, onBack, roleId, profile, prop, room);
+                if (room) renderRoomPage(container, globalState, onBack, roleId, profile, prop, room, returnTo);
             });
         });
     }
@@ -3417,7 +3574,7 @@ function renderPropertyPage(container, globalState, onBack, roleId, profile, pro
 }
 
 // ★ 打造新房间：从毛坯根空间划分子空间（树结构；rect 预留平面可视化；家具容量后续）
-function showBuildRoom(container, globalState, onBack, roleId, profile, prop) {
+function showBuildRoom(container, globalState, onBack, roleId, profile, prop, returnTo) {
     const home = prop.home;
     if (!home) return;
     const used = (home.rooms || []).reduce((s, r) => s + (r.size || 0), 0);
@@ -3476,14 +3633,14 @@ function showBuildRoom(container, globalState, onBack, roleId, profile, prop) {
         // ★ 完成后：弹窗还开着 → 关窗并刷新房产页；已关（用户切走）→ 只 toast 提醒
         if (overlay.isConnected) {
             overlay.remove();
-            renderPropertyPage(container, globalState, onBack, roleId, profile, prop);
+            renderPropertyPage(container, globalState, onBack, roleId, profile, prop, returnTo);
         }
         toast(`🛠️ ${name} 打造完成！${desc ? '「' + desc + '」' : ''}`, '#7c4dff');
     });
 }
 
 // 房间页面：查看打造的房间（家具布置系统后续）
-function renderRoomPage(container, globalState, onBack, roleId, profile, prop, room) {
+function renderRoomPage(container, globalState, onBack, roleId, profile, prop, room, returnTo) {
     const t = HOUSE_TEMPLATES[prop.template] || HOUSE_TEMPLATES.default;
     const building = room.status === 'building';
     container.innerHTML = `
@@ -3502,7 +3659,7 @@ function renderRoomPage(container, globalState, onBack, roleId, profile, prop, r
                 <div style="font-size:12px;color:#999;text-align:center;margin-top:12px;">🛋️ 家具布置系统开发中…</div>
             </div>
         </div>`;
-    container.querySelector('#roomBack').addEventListener('click', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop));
+    container.querySelector('#roomBack').addEventListener('click', () => renderPropertyPage(container, globalState, onBack, roleId, profile, prop, returnTo));
     startDayNightCycle(container);
 }
 
@@ -3815,6 +3972,34 @@ function showPermView(container) {
         toast(`🧠 AI对话记忆已设为 ${hc} 条`);
     });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+}
+
+// ★ 购买住宅区房产：地址 = 地点全名 + 门牌（拼接，全局唯一）
+async function buyHouse(profile, roleId, place, houseName) {
+    const res = simCityResidentials[place.key] || { houses: [{ ...DEFAULT_HOUSE }] };
+    const house = (res.houses || []).find(h => h.name === houseName) || res.houses[0];
+    if (!house) { toast('❌ 房型不存在', '#e53935'); return; }
+    if (profile.money < house.price) { toast(`💰 金币不足，还差 ${house.price - profile.money}`, '#e53935'); return; }
+    // ★ 门牌：按住宅区登记表全局住户数生成（唯一；含迁移旧房产）
+    const resReg = simCityResidentials[place.key] = simCityResidentials[place.key] || { name: place.residential, houses: [{ ...DEFAULT_HOUSE }] };
+    const n = (resReg.residents || []).length;
+    profile.money -= house.price;
+    const addr = `${place.name}-${2 + Math.floor(n / 3)}栋-${101 + (n % 3) * 100}室`;
+    const propList = (profile.properties = profile.properties || []);
+    propList.push({
+        id: 'prop_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+        template: house.template || 'apartment',
+        name: house.name,
+        area: place.name,
+        address: addr
+    });
+    const newProp = propList[propList.length - 1];   // ★ 拿到新房产引用（登记用，修复 lastProp 未定义）
+    await saveProfile(profile, roleId);
+    // ★ 登记到住宅区表（轻量索引：角色 ↔ 该地点住宅区）
+    (resReg.residents = resReg.residents || []).push({ roleId, name: profile.name, propId: newProp.id, address: addr, at: Date.now() });
+    await saveSimCityResidentials(simCityResidentials).catch(() => { });
+    addBulletin(place.key, 'move', `${profile.name}在「${addr}」购置了「${house.name}」`);
+    toast(`🏠 购入「${house.name}」！地址：${addr}`, '#7c4dff');
 }
 
 // ★ 公共购买：扣钱 + 背包 + 库存 -1 + 落库（玩家按钮与 AI 指令共用）
@@ -4537,6 +4722,7 @@ function getPlace(placeKey) {
             key: e.id, name: e.name, icon: e.icon || '🏰',
             btn: e.btn || '开始互动',
             act: 'rest', desc: e.desc || '',
+            residential: e.residential,   // ★ 加这行            
             vibes: e.ambient || [],
             shop: e.shopId ? simCityShops[e.shopId] : null,   // ★ 商店直接挂地点对象
             estate: e,
@@ -4550,10 +4736,11 @@ function getPlace(placeKey) {
         if (s) return {
             key: s.key, name: s.name, icon: s.icon || '🏛️',
             btn: s.btn || '进入',
-            act: s.act || 'rest', 
-            desc: s.desc || '', 
-            parent: est.id, subs: [], 
-            shop: s.shopId ? simCityShops[s.shopId] : null, 
+            act: s.act || 'rest',
+            desc: s.desc || '',
+            residential: s.residential,
+            parent: est.id, subs: [],
+            shop: s.shopId ? simCityShops[s.shopId] : null,
             estate: est
         };
     }

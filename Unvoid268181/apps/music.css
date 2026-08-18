@@ -1,0 +1,184 @@
+/* apps/music.css — 音乐模块（阶段1） */
+
+.music-now-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 20px 16px 16px;
+    gap: 6px;
+}
+
+/* 唱片（旋转动画） */
+.music-disc {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #4caf50, #1b5e20 70%);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25), inset 0 0 0 3px rgba(255, 255, 255, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+}
+.music-disc.playing {
+    animation: music-spin 8s linear infinite;
+}
+.music-disc-inner {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--panel-strong);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.08);
+}
+@keyframes music-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.music-now-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.music-now-artist {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+/* 进度条 */
+.music-progress {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--line);
+    position: relative;
+    margin-top: 10px;
+    cursor: pointer;
+}
+.music-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: var(--accent);
+}
+.music-time-row {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+}
+
+/* 控制按钮 */
+.music-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 10px;
+}
+.music-btn {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform .1s, background .15s;
+}
+.music-btn:active { transform: scale(0.92); }
+.music-btn-main {
+    width: 52px;
+    height: 52px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 18px;
+    box-shadow: 0 4px 12px rgba(11, 147, 246, 0.35);
+}
+
+/* 音量 */
+.music-volume-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--muted);
+}
+.music-volume {
+    flex: 1;
+    accent-color: var(--accent);
+}
+
+/* 曲库列表 */
+.music-list-title {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 10px 14px 4px;
+}
+.music-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+.music-row-badge {
+    flex: none;
+    width: 20px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+}
+.music-row-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.music-row.active {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.music-row.active .music-row-badge,
+.music-row.active .music-row-text {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* 轻提示（断网/播放失败） */
+.music-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 90px;
+    transform: translateX(-50%) translateY(10px);
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: 20px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s, transform .2s;
+    z-index: 99;
+    max-width: 80%;
+    text-align: center;
+}
+.music-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}

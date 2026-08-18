@@ -256,15 +256,23 @@ export class DesktopInteractionManager {
         if (!this.state.participants[participantId]) {
             this.state.participants[participantId] = createParticipantRecord(participantId);
         }
-        if (!this.state.participants[participantId].games) {
-            this.state.participants[participantId].games = {};
-        }
+        const p = this.state.participants[participantId];
+
+        // ★ 兼容旧数据/损坏数据：缺失字段补默认（即使 participant 已存在）
+        if (typeof p.coins !== 'number') p.coins = 0;
+        if (typeof p.fishingLevel !== 'number') p.fishingLevel = 1;
+        if (typeof p.fishingXP !== 'number') p.fishingXP = 0;
+        if (!Array.isArray(p.collection)) p.collection = [];
+        if (!p.maxWeights || typeof p.maxWeights !== 'object') p.maxWeights = {};
+        if (!Array.isArray(p.achievements)) p.achievements = ['初入池塘'];
+        if (!p.games || typeof p.games !== 'object') p.games = {};
+
         Object.keys(GAMES).forEach((gameId) => {
-            if (!this.state.participants[participantId].games[gameId]) {
-                this.state.participants[participantId].games[gameId] = cloneDefaultState(gameId);
+            if (!p.games[gameId]) {
+                p.games[gameId] = cloneDefaultState(gameId);
             }
         });
-        return this.state.participants[participantId];
+        return p;
     }
 
     getGameState(participantId = 'aoi', gameId = 'fishing') {
@@ -293,13 +301,17 @@ export class DesktopInteractionManager {
     }
 
     setHook(gameId, participantId, timer) {
-        this.currentHook = { gameId, participantId, timer };
+        this._hooks = this._hooks || new Map();
+        const key = gameId + ':' + participantId;
+        const prev = this._hooks.get(key);
+        if (prev) clearTimeout(prev);
+        this._hooks.set(key, timer);
     }
     clearHook(gameId, participantId) {
-        if (this.currentHook?.gameId === gameId && this.currentHook?.participantId === participantId) {
-            clearTimeout(this.currentHook.timer);
-            this.currentHook = null;
-        }
+        const key = gameId + ':' + participantId;
+        const timer = this._hooks?.get(key);
+        if (timer) clearTimeout(timer);
+        this._hooks?.delete(key);
     }
 
     clearFishingState(gameId = 'fishing', participantId = 'aoi') {
@@ -620,7 +632,7 @@ export class DesktopInteractionManager {
         const node = document.querySelector('.home-pond, [data-pond]');
         if (node) {
             await this.ensureActorPresence(node, participantId);
-            this.startGame(gameId, participantId, { sourceNode: node });
+            GAMES[gameId]?.trigger?.(this, participantId, { sourceNode: node });
         }
 
         return {

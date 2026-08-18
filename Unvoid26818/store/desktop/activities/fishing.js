@@ -205,62 +205,73 @@ export const fishingGame = {
         const hookedTimer = setTimeout(() => setActorPhase('hooked'), duration * 0.75);
 
         const result = setTimeout(() => {
-            const isTreasure = Math.random() < 0.2;   // 20% 宝箱（稀有鱼）
-            const isFish = Math.random() < 0.72;      // 72% 鱼
-            let catchType = 'trash', label = '🗑️ 捡到杂物', xpGain = 6, coinGain = 0, weight = 0, fishId = null;
+            try {
+                const isTreasure = Math.random() < 0.2;   // 20% 宝箱（稀有鱼）
+                const isFish = Math.random() < 0.72;      // 72% 鱼
+                let catchType = 'trash', label = '🗑️ 捡到杂物', xpGain = 6, coinGain = 0, weight = 0, fishId = null;
 
-            if (isFish || isTreasure) {
-                const { fish, weight: w } = rollFish();
-                weight = w;
-                fishId = fish.id;
-                catchType = isTreasure ? 'rare' : 'fish';
-                label = `${fish.emoji} 抓到一条 ${fish.name}（${weight}kg）`;
-                xpGain = fish.xp || 8;
-                coinGain = fish.value || 4;
-                if (isTreasure) { xpGain += 10; coinGain += 6; }
-            } else {
-                const trash = TRASH_TABLE[Math.floor(Math.random() * TRASH_TABLE.length)];
-                catchType = 'trash';
-                label = `${trash.emoji} ${trash.label}`;
-                xpGain = 4;
-                coinGain = 1;
+                if (isFish || isTreasure) {
+                    const { fish, weight: w } = rollFish();
+                    weight = w;
+                    fishId = fish.id;
+                    catchType = isTreasure ? 'rare' : 'fish';
+                    label = `${fish.emoji} 抓到一条 ${fish.name}（${weight}kg）`;
+                    xpGain = fish.xp || 8;
+                    coinGain = fish.value || 4;
+                    if (isTreasure) { xpGain += 10; coinGain += 6; }
+                } else {
+                    const trash = TRASH_TABLE[Math.floor(Math.random() * TRASH_TABLE.length)];
+                    catchType = 'trash';
+                    label = `${trash.emoji} ${trash.label}`;
+                    xpGain = 4;
+                    coinGain = 1;
+                }
+
+                const participant = manager.ensureParticipant(participantId);
+                participant.coins = (participant.coins || 0) + coinGain;
+                participant.fishingXP = (participant.fishingXP || 0) + xpGain;
+                participant.fishingLevel = Math.max(1, Math.floor((participant.fishingXP || 0) / 80) + 1);
+
+                if (catchType === 'fish' || catchType === 'rare') {
+                    state.totalCaught += 1;
+                    state.today.fish += 1;
+                    if (!Array.isArray(participant.collection)) participant.collection = [];          // ★
+                    if (!participant.collection.includes(fishId)) participant.collection.push(fishId);
+                    // ★ 图鉴记录最大重量
+                    participant.maxWeights = participant.maxWeights || {};
+                    if (weight > (participant.maxWeights[fishId] || 0)) participant.maxWeights[fishId] = weight;
+                    if (!Array.isArray(participant.achievements)) participant.achievements = ['初入池塘'];  // ★
+                    if (participant.collection.length >= 1 && !participant.achievements.includes('初入池塘')) participant.achievements.push('初入池塘');
+                } else {
+                    state.today.trash += 1;
+                }
+
+                state.lastCatch = { type: catchType, fishId, label, weight, timestamp: Date.now(), xp: xpGain, coins: coinGain };
+                state.today.xp += xpGain;
+                state.history.push({ fishId, type: catchType, label, weight, xp: xpGain, coins: coinGain, at: Date.now() });
+                if (state.history.length > 25) state.history = state.history.slice(-25);
+
+                // ★ 收杆回写
+                clearTimeout(hookedTimer);
+                setActorPhase('reeling');
+                manager.recordFishingResult(participantId, { label, coins: coinGain, xp: xpGain, fishId, weight, notes: catchType === 'trash' && fishId === null ? '捡到杂物' : '' }).catch(() => { });
+                setTimeout(() => setActorPhase(null), 2600);
+
+                state.isActive = false;
+                state.cooldownUntil = Date.now() + 30 * 1000;
+                manager.clearHook(gameId, participantId);
+                void manager.saveState();
+                manager.refreshHud(sourceNode, gameId, participantId);
+                manager.renderToast(sourceNode, label, '#2e7d32');
+                clearTimeout(floating);
+            } catch (e) {
+                // ★ 保险丝：结算失败也要复位，绝不卡死 isActive
+                console.warn('🎣 钓鱼结算失败:', e);
+                state.isActive = false;
+                state.cooldownUntil = 0;
+                manager.clearHook(gameId, participantId);
+                void manager.saveState();
             }
-
-            const participant = manager.ensureParticipant(participantId);
-            participant.coins = (participant.coins || 0) + coinGain;
-            participant.fishingXP = (participant.fishingXP || 0) + xpGain;
-            participant.fishingLevel = Math.max(1, Math.floor((participant.fishingXP || 0) / 80) + 1);
-
-            if (catchType === 'fish' || catchType === 'rare') {
-                state.totalCaught += 1;
-                state.today.fish += 1;
-                if (!participant.collection.includes(fishId)) participant.collection.push(fishId);
-                // ★ 图鉴记录最大重量
-                participant.maxWeights = participant.maxWeights || {};
-                if (weight > (participant.maxWeights[fishId] || 0)) participant.maxWeights[fishId] = weight;
-                if (participant.collection.length >= 1 && !participant.achievements.includes('初入池塘')) participant.achievements.push('初入池塘');
-            } else {
-                state.today.trash += 1;
-            }
-
-            state.lastCatch = { type: catchType, fishId, label, weight, timestamp: Date.now(), xp: xpGain, coins: coinGain };
-            state.today.xp += xpGain;
-            state.history.push({ fishId, type: catchType, label, weight, xp: xpGain, coins: coinGain, at: Date.now() });
-            if (state.history.length > 25) state.history = state.history.slice(-25);
-
-            // ★ 收杆回写
-            clearTimeout(hookedTimer);
-            setActorPhase('reeling');
-            manager.recordFishingResult(participantId, { label, coins: coinGain, xp: xpGain, fishId, weight, notes: catchType === 'trash' && fishId === null ? '捡到杂物' : '' }).catch(() => { });
-            setTimeout(() => setActorPhase(null), 2600);
-
-            state.isActive = false;
-            state.cooldownUntil = Date.now() + 30 * 1000;
-            manager.clearHook(gameId, participantId);
-            void manager.saveState();
-            manager.refreshHud(sourceNode, gameId, participantId);
-            manager.renderToast(sourceNode, label, '#2e7d32');
-            clearTimeout(floating);
         }, duration);
 
         manager.setHook(gameId, participantId, result);

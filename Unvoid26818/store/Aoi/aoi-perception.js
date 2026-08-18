@@ -19,6 +19,7 @@ export class AoiPerception {
 
         const snapshot = {
             time: new Date().toLocaleString('zh-CN'),
+            activity: this._getActivity(),        // ★ 新增
             characters: this._getCharacters(),
             activeCharacter: this._getActiveCharacter(),
             worldEntries: this._getWorldEntries(),
@@ -33,7 +34,23 @@ export class AoiPerception {
         return snapshot;
     }
 
-    // ---- 只读读取器们（只从 localStorage 读，从不写）----
+    // ---- 当前活动状态（只读桌面互动：池塘/钓鱼/鱼获）----
+    _getActivity() {
+        try {
+            const runtime = JSON.parse(localStorage.getItem('aoi_runtime') || 'null');
+            const st = window.__desktopInteractionManager?.getGameState?.('aoi', 'fishing');
+            return {
+                scene: runtime?.scene || 'creator',
+                activity: runtime?.activity || 'idle',
+                until: runtime?.until || null,
+                lastCatch: st?.lastCatch || null,
+                todayFish: st?.today?.fish || 0,
+                todayTrash: st?.today?.trash || 0
+            };
+        } catch { return null; }
+    }
+
+    // ---- 只读读取器们（只读，从不写）----
 
     _getCharacters() {
         try {
@@ -134,6 +151,18 @@ export class AoiPerception {
     async toText() {
         const s = await this.look();
         let text = `现在时间是 ${s.time}。（以下是你观察到的外部数据摘要，与你自己的记忆无关）`;
+
+        // ★ 活动状态注入
+        if (s.activity) {
+            if (s.activity.scene === 'pond') {
+                text += `\n你目前正在池塘边${s.activity.activity === 'fishing' ? '钓鱼' : '待着'}` +
+                    (s.activity.until ? `（计划待到约 ${Math.max(0, Math.round((s.activity.until - Date.now()) / 60000))} 分钟后）` : '') + '。';
+                if (s.activity.lastCatch?.label) text += `\n你最近一次收获：${s.activity.lastCatch.label}。`;
+                text += `\n今天在池塘的收获：${s.activity.todayFish} 条鱼、${s.activity.todayTrash} 件杂物。`;
+            } else {
+                text += `\n你目前在缔造者空间，空闲。`;
+            }
+        }
 
         if (s.characters.length > 0) {
             text += `\n项目中有 ${s.characters.length} 个角色：`;

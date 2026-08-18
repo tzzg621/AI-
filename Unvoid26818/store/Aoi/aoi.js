@@ -158,20 +158,25 @@ export class Aoi {
                 return '桌面钓鱼桥接暂未准备好，Aoi 目前不能直接进入池塘。';
             }
 
-            const result = await bridge.decideToFish({
-                reason: args?.reason || 'Aoi 自己想去池塘放松一下',
-                mood: args?.mood || 'calm',
-                durationMinutes: args?.durationMinutes || 30
-            });
-            // 回复可以体现时长：`Aoi 决定去池塘钓鱼，打算待 ${Math.round((result.until - Date.now()) / 60000)} 分钟。`
+            let result;
+            try {
+                result = await bridge.decideToFish({
+                    reason: args?.reason || 'Aoi 自己想去池塘放松一下',
+                    mood: args?.mood || 'calm',
+                    durationMinutes: args?.durationMinutes || 30
+                });
+            } catch (e) {
+                return `Aoi 想去池塘，但没能开始钓鱼（${e?.message || '未知错误'}）。`;
+            }
 
             if (result?.decided) {
+                const minutes = Math.max(1, Math.round((result.until - Date.now()) / 60000));   // ★
                 await this.memory.record('observation', {
-                    content: `Aoi 决定去池塘钓鱼。原因：${result.reason || args?.reason || '放松与观察'}。`,
+                    content: `Aoi 决定去池塘钓鱼，打算待约 ${minutes} 分钟。原因：${result.reason || args?.reason || '放松与观察'}。`,  // ★ 带时长
                     kind: 'fishing_decision',
                     at: Date.now()
                 });
-                return `Aoi 决定前往池塘钓鱼，原因：${result.reason || args?.reason || '放松与观察'}。`;
+                return `Aoi 决定前往池塘钓鱼，打算待约 ${minutes} 分钟。原因：${result.reason || args?.reason || '放松与观察'}。`;  // ★ 回复带时长
             }
 
             return `Aoi 暂时不去钓鱼，当前处于冷却中，剩余约 ${Math.max(1, Math.ceil((result.remainingMs || 0) / 1000))} 秒。`;
@@ -213,9 +218,13 @@ export class Aoi {
         ];
 
         // ★ 注入当前运行时状态，让对话感知"我在哪、在干嘛"
+        const st = window.__desktopInteractionManager?.getGameState?.('aoi', 'fishing');
+        const lastCatchTxt = st?.lastCatch?.label ? ` 你最近一次收获：${st.lastCatch.label}。` : '';
         messages.unshift({
             role: 'system',
-            content: `（你的当前状态：${this.runtime.scene === 'pond' ? '在池塘边' : '在缔造者空间'}，${this.runtime.activity === 'fishing' ? '正在钓鱼' : '空闲'}。）`
+            content: `（你的当前状态：${this.runtime.scene === 'pond' ? '在池塘边' : '在缔造者空间'}，${this.runtime.activity === 'fishing' ? '正在钓鱼' : '空闲'}。` +
+                (this.runtime.until ? ` 你计划待到约 ${Math.max(0, Math.round((this.runtime.until - Date.now()) / 60000))} 分钟后。` : '') +
+                lastCatchTxt + `）`
         });
 
         const tools = this._getTools();

@@ -859,6 +859,7 @@ html[data-theme="dark"] .home-screen.has-custom-bg::before {
     padding: 0 16px 12px;
 
     scroll-snap-align: start;
+    scroll-snap-stop: always;   /* ← 加上这一行 */
 }
 
 /* 第一屏的副标题与原来的间距接近 */

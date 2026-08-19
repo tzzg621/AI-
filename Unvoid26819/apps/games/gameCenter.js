@@ -5,7 +5,8 @@ export const icon = '🎮';
 
 const GAMES = [
     { id: 'jumpJump', label: '跳一跳', icon: '🦘', desc: '按住蓄力，松开跳跃，落点越中心分越高' },
-    { id: 'simCity', label: '模拟小城', icon: '🏙️', desc: '角色联动模拟经营：注册身份，入住小城' }
+    { id: 'simCity', label: '模拟小城', icon: '🏙️', desc: '角色联动模拟经营：注册身份，入住小城' },
+    { id: 'shelter', label: '末日安全屋', icon: '🏚️', desc: '收集物资，建设安全屋，末日生存经营' }
 ];
 
 function renderList(overlay, globalState) {

@@ -4,6 +4,16 @@ import { esc } from '../../store/utils.js';
 import { saveProfile, saveStory, getAdvSession, saveAdvSession, deleteAdvSession } from './simCityStore.js';
 import { taskManager } from '../../store/AITaskManager.js';
 
+const ADV_SETTINGS_KEY = 'text_adventure_settings';
+function loadAdvSettings() {
+    try { return JSON.parse(localStorage.getItem(ADV_SETTINGS_KEY)) || {}; } catch { return {}; }
+}
+function saveAdvSettings(partial) {
+    const s = loadAdvSettings();
+    Object.assign(s, partial);
+    try { localStorage.setItem(ADV_SETTINGS_KEY, JSON.stringify(s)); } catch { }
+}
+
 // ★ 双写：正文（pages等）→ IndexedDB ；标记 → sessionStorage（同 key 存 '1'，供同步检测🎭）
 async function saveAdvState(key, state) {
     try { await saveAdvSession({ id: key, ...state }); } catch (e) { }
@@ -27,6 +37,15 @@ async function clearAdvState(key) {
     try { sessionStorage.removeItem(key); } catch (e) { }
 }
 
+// ★ 从世界书条目按 ids 现拼文本（内容不存，每次现拼）
+function buildWorldbookText(ids) {
+    if (!Array.isArray(ids) || !ids.length) return '';
+    try {
+        const wb = JSON.parse(localStorage.getItem('worldbook_entries') || '[]').filter(e => e.enabled !== false);
+        return wb.filter(e => ids.includes(e.id)).map(e => `- 【${e.title}】${e.text}`).join('\n');
+    } catch { return ''; }
+}
+
 // ★ 引擎内置设定（提示词顺序的第 2 层）
 const BUILTIN_PROMPT = '这是"模拟小城"世界：一座由角色们共同生活的虚拟小城。你是这里的居民，拥有自己的身份、性格与日常，言行自然，像真人一样生活。';
 
@@ -41,13 +60,16 @@ export async function runTextAdventure(container, opts, resumeKey) {
     const { roleId, profile } = opts;
     const key = resumeKey || `${opts.roleId}_${opts.placeKey || 'adv'}`;
     const saved = resumeKey ? await loadAdvState(resumeKey) : null;
+    const advSettings = loadAdvSettings();
 
     const state = saved || {
         title: opts.title || '文游', icon: opts.icon || '🎭', placeName: opts.placeName || '',
         roleId: opts.roleId, prompt: opts.prompt || '', saveStoryType: opts.saveStoryType || '',
         pages: [], rounds: 0, pending: null, ended: false,
         // ★ 提示词上下文（设置时生成，随状态保留，恢复时也在）
-        worldbookText: '', worldbookIds: [], usePresets: true,
+        worldbookIds: advSettings.worldbookIds || [],          // ★ 状态（id 列表）
+        worldbookText: buildWorldbookText(advSettings.worldbookIds || []),   // ★ 内容现拼
+        usePresets: advSettings.usePresets !== false,
         placePresets: opts.placePresets || '',
         placeWorldbook: opts.placeWorldbook || '',
         envInfo: opts.place ? `${opts.place.name}${opts.place.ambienceText ? '，' + opts.place.ambienceText : ''}${opts.place.desc ? '，' + opts.place.desc : ''}` : (opts.placeName || ''),
@@ -250,9 +272,10 @@ export async function runTextAdventure(container, opts, resumeKey) {
         setOverlay.querySelector('#wbApply').addEventListener('click', async () => {
             const ids = [...setOverlay.querySelectorAll('[data-wb]:checked')].map(c => c.dataset.wb);
             state.worldbookIds = ids;
-            state.worldbookText = wb.filter(e => ids.includes(e.id)).map(e => `- 【${e.title}】${e.text}`).join('\n');
+            state.worldbookText = buildWorldbookText(ids);   // ★ 复用拼接函数            
             state.usePresets = setOverlay.querySelector('#wbUsePresets').checked;
             await saveAdvState(key, state);
+            saveAdvSettings({ worldbookIds: ids, usePresets: state.usePresets });   // ★ 引擎级持久
             notify('⚙️ 世界书已应用');
             setOverlay.remove();
         });

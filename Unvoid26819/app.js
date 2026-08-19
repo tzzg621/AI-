@@ -33,6 +33,12 @@ function getSafeTheme(value) {
     return ALLOWED_THEMES.has(value) ? value : 'warm';
 }
 
+function applyIconStyle() {
+    const style = localStorage.getItem('desk_icon_style') || 'new';
+    const link = document.getElementById('iconSystemCss');
+    if (link) link.disabled = style !== 'new';
+}
+
 function getSafeDeskBackground(value) {
     if (typeof value !== 'string') return '';
 
@@ -521,10 +527,12 @@ async function init() {
 
     // ★ 监听主题变更
     window.addEventListener('theme-changed', () => {
+        applyIconStyle();                     // ★
         if (getCurrentRoute() === 'home') {
             render();
         }
     });
+    applyIconStyle();
 
     // init() 函数中
     const showPhoneFrame = localStorage.getItem('global_show_phone_frame') !== 'false';

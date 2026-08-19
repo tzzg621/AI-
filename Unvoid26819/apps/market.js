@@ -23,10 +23,6 @@ function renderMarketList() {
 
     return `
         <div class="screen-page">
-            <div class="screen-header">
-                <div class="screen-title">🏪 应用市场</div>
-                <div class="header-spacer"></div>
-            </div>
             <div class="screen-content">
                 <div class="page-card" style="padding:0;">
                     ${apps.map(app => `

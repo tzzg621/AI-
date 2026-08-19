@@ -1,6 +1,7 @@
 // apps/settingsDesktopTheme.js — 桌面主题设置子页面
 
 const THEME_KEY = 'desk_theme';
+const ICON_STYLE_KEY = 'desk_icon_style';
 
 const THEMES = [
     {
@@ -90,6 +91,7 @@ function setTheme(themeId) {
 
 export function renderDesktopThemeSettings() {
     const current = getCurrentTheme();
+    const iconStyle = localStorage.getItem(ICON_STYLE_KEY) || 'new';
 
     return `
         <div class="screen-page">
@@ -139,6 +141,14 @@ export function renderDesktopThemeSettings() {
                             `;
     }).join('')}
                     </div>
+                    <div style="margin-top:16px;">
+    <div style="font-size:13px;color:#888;margin-bottom:10px;">🔲 图标样式</div>
+    <div style="display:flex;gap:8px;">
+        <button id="iconStyleNew" style="flex:1;border:2px solid ${iconStyle === 'new' ? '#0b93f6' : '#f0f0f0'};background:white;border-radius:14px;padding:12px;font-size:13px;cursor:pointer;">🔷 新图标（图形）</button>
+        <button id="iconStyleEmoji" style="flex:1;border:2px solid ${iconStyle === 'emoji' ? '#0b93f6' : '#f0f0f0'};background:white;border-radius:14px;padding:12px;font-size:13px;cursor:pointer;">😀 旧图标（Emoji）</button>
+    </div>
+</div>
+
                     <div style="margin-top:16px;">
                         <div style="font-size:13px; color:#888; margin-bottom:10px;">🖼️ 自定义壁纸（可叠加在任意主题上）</div>
                         <div class="theme-card" id="customBgCard" style="
@@ -213,6 +223,15 @@ export function bindDesktopThemeEvents(container, onBack) {
             bgClear.style.display = 'none';
         });
     }
+    const setIconStyle = (style) => {
+        localStorage.setItem(ICON_STYLE_KEY, style);
+        window.dispatchEvent(new CustomEvent('theme-changed', { detail: { iconStyle: style } }));   // ★ 触发 app.js 刷新首页
+        const appContainer = container.closest('.screen-page') || container;
+        appContainer.innerHTML = renderDesktopThemeSettings();
+        bindDesktopThemeEvents(appContainer, onBack);
+    };
+    container.querySelector('#iconStyleNew')?.addEventListener('click', () => setIconStyle('new'));
+    container.querySelector('#iconStyleEmoji')?.addEventListener('click', () => setIconStyle('emoji'));
 
     // 主题选择（★ 只绑定带 data-theme 的卡片，排除自定义壁纸卡片）
     container.querySelectorAll('.theme-card[data-theme]').forEach(card => {

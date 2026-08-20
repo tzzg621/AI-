@@ -1,0 +1,565 @@
+import { navItems } from './data.js';
+import { importWithRetry, esc } from './store/utils.js';
+import { init as initDataSync } from './store/DataSync.js';
+import { initDesktopInteraction } from './store/desktop/DesktopInteraction.js';
+
+
+const elements = {
+    clockDisplay: document.getElementById('clockDisplay'),
+    dateDisplay: document.getElementById('dateDisplay'),
+    mockStatusBar: document.getElementById('mockStatusBar'),  // ← 新增
+    // avatarUploader: document.getElementById('avatarUploader'),
+    // avatarImg: document.getElementById('avatarImg'),
+    // ★ 修改：直接用 document.getElementById 获取，更清晰
+    // placeholder: document.querySelector('#avatarUploader .placeholder'),
+    creatorOverlay: document.getElementById('creatorOverlay'),
+    pageContainer: document.getElementById('pageContainer'),
+    bottomNav: document.getElementById('bottomNav'),
+    statusBackBtn: document.getElementById('statusBackBtn')
+};
+
+const state = { stack: ['home'], homePanelIndex: 0 };
+const appMap = new Map((window.__moduleRegistry || []).map((mod) => [mod.id, mod]));
+const ALLOWED_THEMES = new Set([
+    'warm',
+    'cool',
+    'dark',
+    'clean',
+    'pink',
+    'geo'
+]);
+
+function getSafeTheme(value) {
+    return ALLOWED_THEMES.has(value) ? value : 'warm';
+}
+
+function applyIconStyle() {
+    const style = localStorage.getItem('desk_icon_style') || 'new';
+    const link = document.getElementById('iconSystemCss');
+    if (link) link.disabled = style !== 'new';
+}
+
+function getSafeDeskBackground(value) {
+    if (typeof value !== 'string') return '';
+
+    // 当前壁纸由 canvas.toDataURL() 生成。兼容 JPEG、PNG、WebP。
+    // 限制大小，避免被 localStorage 中的异常大字符串拖慢页面渲染。
+    const maxLength = 8 * 1024 * 1024;
+
+    if (value.length > maxLength) return '';
+
+    const dataImagePattern =
+        /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+    return dataImagePattern.test(value)
+        ? `url("${value}")`
+        : '';
+}
+
+function safeIconColor(value) {
+    const color = String(value ?? '').trim();
+
+    // 模块图标目前只允许 #RRGGBB，避免插入任意 CSS。
+    return /^#[0-9a-fA-F]{6}$/.test(color)
+        ? color
+        : '#777777';
+}
+
+const STORAGE_KEY_MEMORIES = 'global_memories';
+
+const memoryService = {
+    addMemory(memory) {
+        const list = this.getMemories();
+        list.unshift(memory);
+        localStorage.setItem(STORAGE_KEY_MEMORIES, JSON.stringify(list));
+        if (getCurrentRoute() === 'memory') {
+            render();
+        }
+    },
+    getMemories() {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY_MEMORIES);
+            if (saved) return JSON.parse(saved);
+        } catch (e) { /* 忽略 */ }
+        // 首次使用：用 data.js 的默认值初始化
+        const defaults = [...memories];
+        localStorage.setItem(STORAGE_KEY_MEMORIES, JSON.stringify(defaults));
+        return defaults;
+    }
+};
+
+const globalState = {
+    activeCharacter: null,     // 当前主视角角色
+    activeCharacterId: -1,     // 对应的索引
+};
+
+// ---- 更新主视角角色的函数 ----
+function setActiveCharacter(character, index) {
+    globalState.activeCharacter = character;
+    globalState.activeCharacterId = index;
+}
+
+function updateClock() {
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    elements.clockDisplay.textContent = `${hours}:${minutes}`;
+    elements.dateDisplay.textContent = `${now.getMonth() + 1}月${now.getDate()}日`;
+}
+
+function navigateTo(route) {
+    if (route === 'home') {
+        state.stack = ['home'];
+    } else if (state.stack[state.stack.length - 1] !== route) {
+        state.stack.push(route);
+    }
+    render();
+}
+
+function goBack() {
+    if (elements.creatorOverlay.classList.contains('show')) {
+        elements.creatorOverlay.classList.remove('show');
+        return;
+    }
+
+    // ★ 尝试调用模块的 handleBack 函数
+    const handled = callModule(getCurrentRoute(), 'handleBack', elements.pageContainer, { memoryService, globalState });
+    if (handled) return;
+
+    if (state.stack.length > 1) {
+        state.stack.pop();
+        render();
+    }
+}
+
+function getCurrentRoute() {
+    return state.stack[state.stack.length - 1];
+}
+
+function renderHome() {
+    const modules = window.__moduleRegistry || [];
+    // ★ 自定义壁纸
+    const customBg = localStorage.getItem('desk_bg');
+    const safeBg = getSafeDeskBackground(customBg);
+
+    const bottomNavIds = ['settings', 'market', 'memory'];
+    const secondaryIds = new Set(['onlineBookCity', 'sketchbook', 'gallerycard']);
+    const primaryModules = modules.filter(mod =>
+        !bottomNavIds.includes(mod.id) && mod.id !== 'creatorSpace' && !secondaryIds.has(mod.id)
+    );
+    const secondaryModules = modules.filter(mod => secondaryIds.has(mod.id));
+
+    // ★ 问候语
+    const now = new Date();
+    const hour = now.getHours();
+    let greeting;
+    if (hour < 6) greeting = '夜深了';
+    else if (hour < 9) greeting = '早上好';
+    else if (hour < 12) greeting = '上午好';
+    else if (hour < 14) greeting = '中午好';
+    else if (hour < 18) greeting = '下午好';
+    else greeting = '晚上好';
+
+    const month = now.getMonth() + 1;
+    const day = now.getDate();
+    const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+    const weekday = weekdays[now.getDay()];
+    const dateStr = `${month}月${day}日 周${weekday}`;
+
+    // ★ 桌宠配置
+    const currentTheme = getSafeTheme(localStorage.getItem('desk_theme'));
+
+    // ★ 同步当前主题到 <html> 元素（全页面所有组件都能感知）
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    // ★ 自定义壁纸：挂到 <html> 的 CSS 变量（避免每次 render 把大字符串拼进 HTML）
+    document.documentElement.style.setProperty('--desk-bg', safeBg);
+
+    const renderAppCard = (app) => `
+    <button class="app-card" data-route="${esc(app.id)}">
+        <div class="icon-box" style="background:${safeIconColor(app.color)};">
+            ${esc(app.icon)}
+        </div>
+        <div class="label">${esc(app.label)}</div>
+    </button>
+`;
+
+    const totalPanels = 3;
+
+    return `
+<div class="home-screen theme-${currentTheme}${safeBg ? ' has-custom-bg' : ''}">
+    <div class="home-shared-intro">
+        <div class="home-greeting">
+            <div class="greeting-text">${greeting} 👋</div>
+            <div class="greeting-date">${dateStr}</div>
+        </div>
+            <div class="home-subtitle">选择一个功能进入</div>
+
+        <div class="desk-pet-module">
+            <div class="pet-area" id="petArea">
+                <div class="pet-platform"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="home-panels">
+        <div class="home-panel home-panel-main" data-panel-index="0">
+
+            <div class="home-grid">
+                ${primaryModules.map(renderAppCard).join('')}
+            </div>
+        </div>
+
+        <div class="home-panel home-panel-secondary" data-panel-index="1">
+            <div class="home-panel-header">创作与发现</div>
+
+            <div class="home-grid home-grid-secondary">
+                ${secondaryModules.map(renderAppCard).join('')}
+            </div>
+
+            <div class="home-pond" data-desktop-game="fishing" data-pond="true" aria-label="Aoi 钓鱼池塘">
+                <div class="pond-bank"></div>
+                <div class="pond-water">
+                    <span class="pond-ripple ripple-one"></span>
+                    <span class="pond-ripple ripple-two"></span>
+                    <span class="pond-ripple ripple-three"></span>
+                    <span class="pond-fish">🐟</span>
+                </div>
+                <div class="pond-reeds">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="home-panel home-panel-third" data-panel-index="2" aria-label="第三屏"></div>
+    </div>
+
+    <div class="home-dot-indicator" aria-label="首页分页指示器">
+        ${Array.from({ length: totalPanels }, (_, index) => `
+            <button
+                class="home-dot ${index === state.homePanelIndex ? 'active' : ''}"
+                data-home-dot="${index}"
+                aria-label="第 ${index + 1} 页"
+                aria-current="${index === state.homePanelIndex ? 'true' : 'false'}"
+            ></button>
+        `).join('')}
+    </div>
+</div>
+    `;
+}
+
+function render() {
+    window.dispatchEvent(new CustomEvent('route-rendered'));   // ★ 切页/重渲染广播
+    const route = getCurrentRoute();
+    elements.statusBackBtn.style.visibility = route === 'home' ? 'hidden' : 'visible';
+    elements.statusBackBtn.style.display = 'inline-flex';  // 始终占位
+    elements.creatorOverlay.classList.remove('show');
+
+    // ★ 读取全局设置，控制状态栏显示
+    const showStatusBar = localStorage.getItem('global_show_status_bar') !== 'false';
+    elements.mockStatusBar.classList.toggle('hidden', !showStatusBar);
+
+    if (route === 'home') {
+        elements.pageContainer.innerHTML = renderHome();
+        elements.pageContainer.dataset.homeBound = 'false';
+        // ★ 首页放开溢出限制（让桌宠能跳）
+        elements.pageContainer.style.overflow = 'visible';
+        renderBottomNav();
+        bindHomeEvents();
+        // ★ 通知 DeskPet 重新渲染
+        window.dispatchEvent(new CustomEvent('desk-rendered'));
+        return;
+    }
+    // ★ 非首页恢复 overflow hidden（保证其他页面内容正常）
+    elements.pageContainer.style.overflow = 'hidden';
+
+    // ★ 不再单独处理 settings/market/memory，统一走模块调用
+    const renderResult = callModule(route, 'render', { memoryService, globalState });
+    if (renderResult) {
+        elements.pageContainer.innerHTML = renderResult;
+        callModule(route, 'bindEvents', elements.pageContainer, { memoryService, globalState });
+    } else {
+        elements.pageContainer.innerHTML = `...内容暂未准备好...`;
+    }
+
+    elements.bottomNav.classList.add('hidden');
+}
+
+function renderBottomNav() {
+    elements.bottomNav.innerHTML = navItems.map((item) => `
+        <button class="nav-item" data-route="${esc(item.id)}">
+            <span class="nav-icon">${esc(item.icon)}</span>${esc(item.label)}
+        </button>
+    `).join('');
+
+    elements.bottomNav.classList.toggle(
+        'hidden',
+        getCurrentRoute() !== 'home'
+    );
+}
+
+
+function bindHomeEvents() {
+    if (elements.pageContainer.dataset.homeBound === 'true') return;
+    elements.pageContainer.dataset.homeBound = 'true';
+
+    const homePanels = elements.pageContainer.querySelector('.home-panels');
+    const homeDots = elements.pageContainer.querySelectorAll('.home-dot');
+    const sharedIntro = elements.pageContainer.querySelector('.home-shared-intro');
+
+    let introFramePending = false;
+
+    // 更新分页圆点状态
+    const updateDots = () => {
+        homeDots.forEach((dot, index) => {
+            const active = index === state.homePanelIndex;
+
+            dot.classList.toggle('active', active);
+            dot.setAttribute('aria-current', String(active));
+        });
+    };
+
+    // 第一、二屏时共享区域保持不动；
+    // 从第二屏进入第三屏时，共享区域向左移出
+    const syncSharedIntro = () => {
+        if (!sharedIntro || !homePanels) return;
+
+        const panelWidth = Math.max(homePanels.clientWidth, 1);
+
+        const thirdPanelProgress = Math.min(
+            Math.max(
+                (homePanels.scrollLeft - panelWidth) / panelWidth,
+                0
+            ),
+            1
+        );
+
+        sharedIntro.style.transform =
+            `translate3d(${-thirdPanelProgress * 100}%, 0, 0)`;
+    };
+
+    if (homePanels) {
+        // 根据当前记录的页码定位
+        homePanels.scrollTo({
+            left: homePanels.clientWidth * state.homePanelIndex,
+            behavior: 'auto'
+        });
+
+        // 初次进入页面时同步共享区和圆点
+        syncSharedIntro();
+        updateDots();
+
+        homePanels.addEventListener('scroll', () => {
+            const index = Math.round(
+                homePanels.scrollLeft /
+                Math.max(homePanels.clientWidth, 1)
+            );
+
+            state.homePanelIndex = Math.min(
+                Math.max(index, 0),
+                2
+            );
+
+            // 一帧内最多更新一次共享区域，避免滚动时频繁改布局
+            if (!introFramePending) {
+                introFramePending = true;
+
+                requestAnimationFrame(() => {
+                    introFramePending = false;
+                    syncSharedIntro();
+                });
+            }
+
+            updateDots();
+        }, { passive: true });
+    }
+
+    // 点击分页圆点
+    homeDots.forEach((dot) => {
+        dot.addEventListener('click', () => {
+            const nextIndex = Math.min(
+                Math.max(Number(dot.dataset.homeDot || 0), 0),
+                2
+            );
+
+            state.homePanelIndex = nextIndex;
+
+            if (homePanels) {
+                homePanels.scrollTo({
+                    left: homePanels.clientWidth * nextIndex,
+                    behavior: 'smooth'
+                });
+            }
+
+            // 立即更新圆点；
+            // 共享区域会由 scroll 事件持续同步
+            updateDots();
+        });
+    });
+
+    // 点击桌面应用
+    elements.pageContainer
+        .querySelectorAll('.app-card[data-route]')
+        .forEach((button) => {
+            button.addEventListener('click', () => {
+                const panel = button.closest('.home-panel');
+
+                state.homePanelIndex = Number(
+                    panel?.dataset.panelIndex ?? 0
+                );
+
+                navigateTo(button.dataset.route);
+            });
+        });
+}
+
+function bindAppEvents(route) {
+    const module = appMap.get(route);
+    if (module && typeof module.bindEvents === 'function') {
+        module.bindEvents(elements.pageContainer, { memoryService, globalState });
+    }
+}
+
+function attachEvents() {
+
+    const goldenCord = document.getElementById('goldenCord');
+
+    goldenCord.addEventListener('click', async () => {
+        goldenCord.classList.add('pulled');
+        setTimeout(() => goldenCord.classList.remove('pulled'), 500);
+
+        // ★ 导航到缔造者空间页面
+        navigateTo('creatorSpace');
+    });
+
+    // 下滑手势
+    let touchStartY = 0;
+    goldenCord.addEventListener('touchstart', (e) => {
+        touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+
+
+
+    elements.statusBackBtn.addEventListener('click', goBack);
+
+    document.addEventListener('click', (event) => {
+        const backButton = event.target.closest('[data-action="back"]');
+        if (backButton) {
+            goBack();
+            return;
+        }
+
+        const navItem = event.target.closest('.bottom-nav .nav-item');
+        if (navItem) {
+            navigateTo(navItem.dataset.route);
+        }
+
+    });
+
+    // ★ 监听 chatUI 组件发出的事件
+    window.addEventListener('chat-clear', (e) => {
+        const { otherId } = e.detail;
+        // 清空对话逻辑，由 chat.js 的 handleBack 或外部函数处理
+        console.log('清空对话:', otherId);
+    });
+
+    window.addEventListener('chat-view-memories', (e) => {
+        const { charId, charName } = e.detail;
+        // 跳转到记忆簿页面
+        console.log('查看记忆:', charName);
+    });
+
+    window.addEventListener('chat-extension', (e) => {
+        const { ext, pairKey, otherId } = e.detail;
+        console.log('扩展功能:', ext);
+    });
+
+}
+
+// ★ 通用调用函数：调用模块的某个功能，没有就返回 null
+function callModule(route, fnName, ...args) {
+    // 先查缓存
+    let mod = appMap.get(route);
+
+    // 没找到 → 查实时注册表（动态加载的模块）
+    if (!mod) {
+        mod = (window.__moduleRegistry || []).find(m => m.id === route);
+        if (mod) appMap.set(route, mod); // 加入缓存
+    }
+
+    if (!mod) return null;
+    const fn = mod[fnName];
+    if (typeof fn === 'function') return fn(...args);
+    return null;
+}
+
+async function init() {
+    // ★ 初始化数据同步层（IndexedDB + 内存缓存）
+    await initDataSync().catch(e => console.warn('📦 DataSync 初始化失败:', e));
+    // ★ 广播：DataSync 已就绪，模块可以重新加载数据
+    window.dispatchEvent(new CustomEvent('datasync-ready'));
+    // ★ 初始化时同步已保存的主题
+    const savedTheme = localStorage.getItem('desk_theme') || 'warm';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateClock();
+    setInterval(updateClock, 1000);
+    attachEvents();
+
+    // ★ 遍历注册表，执行所有标记了 bootInit 的 init 函数
+    (window.__moduleRegistry || []).forEach(mod => {
+        if (mod.init && mod.bootInit) {
+            try {
+                mod.init(globalState);
+            } catch (e) {
+                console.warn(`模块 ${mod.id} 初始化失败：`, e);
+            }
+        }
+    });
+
+    // ★ 组件级桌面互动：只挂在水池节点上，不改动其他模块逻辑
+    try {
+        initDesktopInteraction();
+    } catch (error) {
+        console.warn('桌面互动初始化失败：', error);
+    }
+
+    // ★ 监听主题变更
+    window.addEventListener('theme-changed', () => {
+        applyIconStyle();                     // ★
+        if (getCurrentRoute() === 'home') {
+            render();
+        }
+    });
+    applyIconStyle();
+
+    // init() 函数中
+    const showPhoneFrame = localStorage.getItem('global_show_phone_frame') !== 'false';
+    if (!showPhoneFrame) {
+        document.body.classList.add('no-frame');
+    }
+
+
+
+    render();
+}
+
+// ★ 注册缔造者空间模块
+importWithRetry(() => import('./creator-space/crystal.js')).then(mod => {
+    if (!window.__moduleRegistry) window.__moduleRegistry = [];
+    window.__moduleRegistry.push({
+        id: mod.id,
+        label: mod.label,
+        icon: mod.icon,
+        color: mod.color,
+        render: mod.render,
+        bindEvents: mod.bindEvents,
+        handleBack: mod.handleBack
+    });
+});
+
+
+init();
+
+

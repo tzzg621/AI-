@@ -1,0 +1,364 @@
+// store/CharacterStore.js
+// ★ 这个类负责管理单个角色的所有数据（好友、聊天、记忆）
+
+const STORAGE_PREFIX = 'char_';  // 所有角色数据以 char_ 开头存储
+
+export class CharacterStore {
+    // constructor 是"构造函数"——当你 new CharacterStore('farmer') 时自动调用
+    constructor(characterId) {
+        this.id = characterId;
+        this.storageKey = STORAGE_PREFIX + characterId;  // 例如: 'char_farmer'
+        this.data = this._load();
+    }
+
+    // ---- 私有方法（以 _ 开头，表示"不要直接调用"）----
+    _load() {
+        const saved = localStorage.getItem(this.storageKey);
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                // 确保必要的字段存在（兼容旧数据）
+                if (!parsed.friends) parsed.friends = {};
+                if (!parsed.chatMessages) parsed.chatMessages = {};
+                if (!parsed.memories) parsed.memories = [];
+                if (!parsed.info) parsed.info = {};
+                if (!parsed.relations) parsed.relations = [];
+                if (!parsed.cognitiveNotes) parsed.cognitiveNotes = {};
+                if (!parsed.moments) parsed.moments = [];
+                if (!parsed.profile) parsed.profile = {};   // ★ 新增：公开信息分层（每个角色都有，统一模板）
+                return parsed;
+            } catch (e) {
+                console.warn(`角色 ${this.id} 数据损坏，已重置`);
+            }
+        }
+        // 默认数据结构
+        return {
+            id: this.id,       // ← 用 this.id
+            info: {},         // ★ 新增：存储名称、头像等显示信息
+            friends: {},
+            chatMessages: {},
+            memories: [],
+            relations: [],
+            cognitiveNotes: {},
+            moments: [],
+            profile: {}
+        };
+    }
+
+    // ★ 新增：设置角色显示信息
+    setInfo(info) {
+        this.data.info = { ...this.data.info, ...info };
+        this._save();
+    }
+
+    // ★ 新增：获取角色显示信息
+    getInfo() {
+        return this.data.info || {};
+    }
+
+    _save() {
+        localStorage.setItem(this.storageKey, JSON.stringify(this.data));
+    }
+
+    // ---- 好友操作 ----
+    addFriend(friendId) {
+        if (this.data.friends[friendId]) return false; // 已经是好友
+        this.data.friends[friendId] = true;
+        this._save();
+        return true;
+    }
+
+    removeFriend(friendId) {
+        if (!this.data.friends[friendId]) return false;
+        delete this.data.friends[friendId];
+        this._save();
+        return true;
+    }
+
+    isFriend(friendId) {
+        return !!this.data.friends[friendId];
+    }
+
+    getFriendIds() {
+        return Object.keys(this.data.friends);
+    }
+
+    // ---- 聊天操作 ----
+    addMessage(pairKey, message) {
+        if (!this.data.chatMessages[pairKey]) {
+            this.data.chatMessages[pairKey] = [];
+        }
+        this.data.chatMessages[pairKey].push(message);
+        this._save();
+    }
+
+    getMessages(pairKey) {
+        return this.data.chatMessages[pairKey] || [];
+    }
+
+    getAllPairKeys() {
+        return Object.keys(this.data.chatMessages);
+    }
+
+    // ---- 记忆操作 ----
+    addMemory(memory) {
+        this.data.memories.push(memory);
+        this._save();
+    }
+
+    getMemories() {
+        return this.data.memories;
+    }
+
+    // ---- 关系操作 ----
+    setRelations(relations) {
+        this.data.relations = relations;
+        this._save();
+    }
+
+    getRelations() {
+        return this.data.relations || [];
+    }
+
+    updateRelation(name, relation, perspective, id) {
+        const rels = this.getRelations();
+
+        // ① 优先按 id 精确匹配（同名不同 id 互不干扰；已绑定的角色再次聊天直接命中，不会新建）
+        if (id) {
+            const hit = rels.find(r => r.id === id);
+            if (hit) {
+                hit.relation = relation;
+                if (perspective !== undefined) hit.perspective = perspective;
+                this.setRelations(rels);
+                return;
+            }
+        }
+
+        // ② 按 name 找"未绑定 id"的同名条目 → 绑定给它（第一次遇到同名角色，补 id，即现在的逻辑）
+        const unbound = rels.find(r => r.name === name && !r.id);
+        if (unbound) {
+            unbound.relation = relation;
+            if (perspective !== undefined) unbound.perspective = perspective;
+            unbound.id = id || '';
+            this.setRelations(rels);
+            return;
+        }
+
+        // ③ 同名条目都已绑定 id（是其他角色）→ 新建一条锁定新 id；或完全没有同名 → 新建
+        rels.push({ name, relation, perspective: perspective || '', id: id || '' });
+        this.setRelations(rels);
+    }
+
+    updateAttitudes(name, attitudes, id) {
+        const rels = this.getRelations();
+        // ★ 优先按 id 匹配（同名不同 id 不误伤）
+        let existing = id ? rels.find(r => r.id === id) : null;
+        // 查不到再按 name 匹配（兼容旧行为）
+        if (!existing) existing = rels.find(r => r.name === name);
+        if (existing) {
+            existing.attitudes = attitudes;
+            this.setRelations(rels);
+        }
+    }
+
+    removeRelation(name, id) {
+        const rels = this.getRelations();
+        // ★ 优先按 id 删除（只删指定那条）；没 id 才按 name 删（旧行为）
+        this.setRelations(id
+            ? rels.filter(r => r.id !== id)
+            : rels.filter(r => r.name !== name)
+        );
+    }
+
+    // 新增：按 ID 查找关系（精准匹配）
+    getRelationById(otherId) {
+        return this.getRelations().find(r => r.id === otherId);
+    }
+
+
+    // ---- 认知笔记操作 ----
+    setCognitiveNote(name, text) {
+        if (!this.data.cognitiveNotes) this.data.cognitiveNotes = {};
+        if (text) {
+            this.data.cognitiveNotes[name] = text;
+        } else {
+            delete this.data.cognitiveNotes[name];
+        }
+        this._save();
+    }
+
+    getCognitiveNote(name) {
+        return this.data.cognitiveNotes?.[name] || '';
+    }
+
+    getAllCognitiveNotes() {
+        return this.data.cognitiveNotes || {};
+    }
+
+    // ---- 公开信息分层（每个角色统一模板，不分名册/网络）----
+    getProfile() {
+        return this.data.profile || {};
+    }
+
+    setProfile(profile) {
+        this.data.profile = profile || {};
+        this._save();
+    }
+
+    // ---- 朋友圈操作（数据归属：动态作者）----
+
+    getMoments() {
+        return this.data.moments || [];
+    }
+
+    addMoment(text, images = []) {
+        if (!this.data.moments) this.data.moments = [];
+        const moment = {
+            id: 'm_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+            authorId: this.id,
+            text,
+            images,
+            timestamp: Date.now(),
+            likes: [],        // 点赞者 id 列表（记录是哪位 id 点了赞）
+            comments: []      // 评论列表（记录评论者 id）
+        };
+        this.data.moments.push(moment);
+        this._save();
+        return moment;
+    }
+
+    deleteMoment(momentId) {
+        this.data.moments = (this.data.moments || []).filter(m => m.id !== momentId);
+        this._save();
+    }
+
+    likeMoment(momentId, likerId) {
+        const m = (this.data.moments || []).find(x => x.id === momentId);
+        if (!m) return;
+        m.likes = m.likes.includes(likerId)
+            ? m.likes.filter(id => id !== likerId)   // 再点取消
+            : [...m.likes, likerId];
+        this._save();
+    }
+
+    commentMoment(momentId, comment) {
+        const m = (this.data.moments || []).find(x => x.id === momentId);
+        if (!m) return;
+        m.comments.push({
+            id: 'c_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+            authorId: comment.authorId,
+            authorName: comment.authorName,   // 显示名快照
+            text: comment.text,
+            timestamp: Date.now()
+        });
+        this._save();
+    }
+
+    replyComment(momentId, targetId, reply) {
+        const m = (this.data.moments || []).find(x => x.id === momentId);
+        if (!m) return;
+        let container = null;
+        let targetName = '';
+
+        // ① 目标在评论里
+        const c = (m.comments || []).find(x => x.id === targetId);
+        if (c) {
+            container = c.replies || (c.replies = []);
+            targetName = c.authorName;
+        } else {
+            // ② 目标在某条回复里（平铺到该评论的 replies）
+            for (const cc of m.comments || []) {
+                const r = (cc.replies || []).find(x => x.id === targetId);
+                if (r) {
+                    container = cc.replies;
+                    targetName = r.authorName;
+                    break;
+                }
+            }
+        }
+        if (!container) return;
+
+        container.push({
+            id: 'r_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+            authorId: reply.authorId,
+            authorName: reply.authorName,       // 回复者名字快照
+            replyToId: targetId,                 // 被回复目标 id
+            replyToName: targetName,             // 被回复者名字快照
+            text: reply.text,
+            timestamp: Date.now()
+        });
+        this._save();
+    }
+
+    // ---- 朋友圈：手动修正（只替换文字，清空互动避免信息错乱） ----
+    updateMomentText(momentId, text) {
+        const m = (this.data.moments || []).find(x => x.id === momentId);
+        if (!m) return false;
+        m.text = text;
+        m.likes = [];
+        m.comments = [];
+        this._save();
+        return true;
+    }
+
+
+
+    // ---- 获取完整的角色数据（给其他模块用） ----
+    getFullData() {
+        return { ...this.data };
+    }
+}
+
+// ---- 双向好友操作 ----
+export function addBidirectionalFriend(id1, id2) {
+    const store1 = new CharacterStore(id1);
+    const store2 = new CharacterStore(id2);
+    const added1 = store1.addFriend(id2);
+    const added2 = store2.addFriend(id1);
+    return added1 || added2;
+}
+
+
+// ---- 全局工具函数 ----
+export function generateId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substr(2, 5);
+    return `char_${timestamp}_${random}`;
+}
+
+// ---- 统一角色数据结构模板 ----
+export function createDefaultCharacterData(id, baseInfo, type = 'npc', flags = {}) {
+    return {
+        id: id,
+        base: {
+            name: baseInfo.name || '未知角色',
+            // emoji: baseInfo.emoji || '❓',
+            desc: baseInfo.desc || '',
+            detail: baseInfo.detail || '',      // ★ 详细设定新增
+            gender: baseInfo.gender || '未知',  // ★ 新增
+            age: baseInfo.age || '未知',        // ★ 新增
+            orientation: baseInfo.orientation || '未知',  // ★ 新增
+            stats: baseInfo.stats || {},        // 保留空对象，不影响现有代码
+            secret: baseInfo.secret || '',
+            style: baseInfo.style || '',
+            memories: baseInfo.memories || []
+        },
+        type: type,  // 'npc' | 'character' | 'special'
+        flags: {
+            convertible: flags.convertible !== undefined ? flags.convertible : true,
+            switchable: flags.switchable !== undefined ? flags.switchable : false,
+            customizable: flags.customizable !== undefined ? flags.customizable : false
+        },
+        // extended: {
+        //     backstory: flags.backstory || '',
+        //     skills: flags.skills || '',
+        //     relations: flags.relations || ''
+        // }
+    };
+}
+
+// ---- 全局工具函数：获取当前主视角角色的 ID ----
+export function getActiveCharacterId(globalState) {
+    const char = globalState?.activeCharacter;
+    return char?.id || char?.base?.name || 'unknown';
+}

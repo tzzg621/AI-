@@ -1,0 +1,448 @@
+/* apps/worldNet.css — 世界角色网络 · NPC 管理 */
+
+.wn-page {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* ---- 区块标题 ---- */
+.wn-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 0 2px;
+}
+
+.wn-section-head strong {
+    display: block;
+    color: var(--text);
+    font-size: 16px;
+}
+
+.wn-section-head span {
+    display: block;
+    margin-top: 2px;
+    color: #999;
+    font-size: 11px;
+}
+
+.wn-count {
+    flex: none;
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--accent);
+    background: rgba(11, 147, 246, 0.1);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.wn-intro {
+    margin: 0 2px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* ---- 列表 ---- */
+.wn-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.wn-group-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 2px 0;
+    color: #999;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ---- 卡片 ---- */
+.wn-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 14px 14px 16px;
+    overflow: hidden;
+    border: 1px solid #eceef2;
+    border-radius: 16px;
+    background: var(--panel-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+/* 左侧状态色条 */
+.wn-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--wn-accent, #cbd2dc);
+}
+
+.wn-card--convertible { --wn-accent: #ff9800; }
+.wn-card--special { --wn-accent: #9c27b0; }
+.wn-card--converted {
+    --wn-accent: #b7bec9;
+    opacity: 0.72;
+}
+.wn-card--archived {
+    --wn-accent: #b7bec9;
+    opacity: 0.6;
+    filter: grayscale(0.6);
+}
+
+/* ---- 卡片头部 ---- */
+.wn-card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.wn-avatar {
+    width: 48px;
+    height: 48px;
+    flex: 0 0 48px;
+    overflow: hidden;
+    border-radius: 14px;
+    background: #eef1f5;
+}
+
+.worldnet-portrait.wn-avatar {
+    cursor: pointer;
+    transition: transform 0.15s ease;
+}
+
+.worldnet-portrait.wn-avatar:active {
+    transform: scale(0.94);
+}
+
+.wn-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.wn-card-meta {
+    flex: 1;
+    min-width: 0;
+}
+
+.wn-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.wn-card-name {
+    overflow: hidden;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wn-card-desc {
+    margin-top: 3px;
+    max-height: 2.9em;   /* line-height 1.45 × 2 行 */
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+/* ---- 状态角标 ---- */
+.wn-badge {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.wn-badge--regular {
+    color: #d97706;
+    background: rgba(255, 152, 0, 0.12);
+}
+.wn-badge--unconventional {
+    color: #d97706;
+    background: rgba(255, 152, 0, 0.16);
+}
+.wn-badge--special {
+    color: #9c27b0;
+    background: rgba(156, 39, 176, 0.12);
+}
+.wn-badge--converted,
+.wn-badge--archived {
+    color: #6b7280;
+    background: rgba(107, 114, 128, 0.12);
+}
+
+/* ---- 操作区 ---- */
+.wn-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.wn-action-row {
+    display: flex;
+    gap: 8px;
+}
+
+/* ---- 按钮统一规格 ---- */
+.wn-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 9px 12px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1;
+    transition: transform 0.12s ease, background 0.15s ease;
+}
+
+.wn-btn:active {
+    transform: scale(0.97);
+}
+
+.wn-btn--block {
+    width: 100%;
+}
+
+.wn-action-row .wn-btn {
+    flex: 1;
+}
+
+/* 主行动：转化 */
+.wn-btn--primary {
+    color: #fff;
+    background: #ff9800;
+}
+.wn-btn--primary:hover {
+    background: #f08c00;
+}
+
+/* 次行动：加联系人 */
+.wn-btn--outline {
+    color: var(--accent);
+    border-color: rgba(11, 147, 246, 0.5);
+    background: #fff;
+}
+.wn-btn--outline:hover {
+    background: rgba(11, 147, 246, 0.06);
+}
+
+/* 归档 */
+.wn-btn--warn {
+    color: #d97706;
+    border-color: rgba(255, 152, 0, 0.5);
+    background: #fff;
+}
+.wn-btn--warn:hover {
+    background: rgba(255, 152, 0, 0.08);
+}
+
+/* 删除 */
+.wn-btn--danger {
+    color: #e53935;
+    border-color: rgba(229, 57, 53, 0.5);
+    background: #fff;
+}
+.wn-btn--danger:hover {
+    background: rgba(229, 57, 53, 0.06);
+}
+
+/* 禁用 / 已完成态 */
+.wn-btn--muted,
+.wn-btn:disabled {
+    color: #9aa1ac;
+    border-color: #e2e5ea;
+    background: #f4f5f7;
+    cursor: not-allowed;
+}
+.wn-btn:disabled:active {
+    transform: none;
+}
+
+/* ---- 提示条 ---- */
+.wn-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 12px;
+    border-radius: 12px;
+    color: #a9720b;
+    background: rgba(255, 152, 0, 0.09);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+/* ============================================================
+   转化确认页
+   ============================================================ */
+
+.wn-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.wn-confirm-lead {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.wn-panel {
+    padding: 14px;
+    border: 1px solid #eceef2;
+    border-radius: 16px;
+    background: var(--panel-strong);
+}
+
+.wn-panel--readonly {
+    background: #fbfbfc;
+}
+
+.wn-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.wn-panel--readonly .wn-panel-title { color: #d97706; }
+.wn-panel--edit .wn-panel-title { color: var(--accent); }
+
+.wn-identity {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.wn-identity-emoji {
+    font-size: 38px;
+    line-height: 1;
+}
+
+.wn-identity-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+.wn-field {
+    margin-bottom: 12px;
+}
+
+.wn-field:last-child {
+    margin-bottom: 0;
+}
+
+.wn-field-label {
+    margin-bottom: 4px;
+    color: #999;
+    font-size: 12px;
+}
+
+.wn-field-value {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #f4f5f7;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.wn-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.wn-stat {
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: #f4f5f7;
+    color: var(--text);
+    font-size: 12px;
+}
+
+.wn-stat strong {
+    color: var(--accent);
+}
+
+.wn-input,
+.wn-textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #d9dce1;
+    border-radius: 10px;
+    outline: none;
+    background: #fff;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+
+.wn-textarea {
+    resize: vertical;
+    line-height: 1.5;
+}
+
+.wn-input:focus,
+.wn-textarea:focus {
+    border-color: var(--accent);
+}
+
+.wn-note {
+    padding: 14px;
+    border-radius: 12px;
+    background: #f4f5f7;
+    color: #9aa1ac;
+    text-align: center;
+    font-size: 13px;
+}
+
+.wn-confirm-submit {
+    width: 100%;
+    padding: 13px;
+    border: 0;
+    border-radius: 14px;
+    color: #fff;
+    background: #ff9800;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.wn-confirm-submit:active {
+    transform: scale(0.99);
+}

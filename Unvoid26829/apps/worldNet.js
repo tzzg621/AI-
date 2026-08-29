@@ -416,7 +416,7 @@ export function render({ memoryService }) {
     rebuildNpcList();  // ← 加这一行，切页面时读最新数据
     const convertedIds = getConvertedIds();
 
-       return `
+    return `
     <div class="screen-page">
         <div class="screen-header">
             <div class="screen-title">${title}</div>
@@ -426,7 +426,7 @@ export function render({ memoryService }) {
             <div class="page-card wn-page">
                 ${renderWorldNetGraph({
         activeId: getActiveCharacterIdFromStorage()
-    })}   
+    })}
 
                 <div class="wn-section-head">
                     <div>
@@ -440,10 +440,10 @@ export function render({ memoryService }) {
 
                 <div class="wn-list">
                     ${npcs.map((npc, index) => {
-            const isConverted = getConvertedIds().includes(npc.id);
-            if (isConverted) return '';
-            return createNPCCardHTML(npc, index, isConverted);
-        }).join('')}
+        const isConverted = getConvertedIds().includes(npc.id);
+        if (isConverted) return '';
+        return createNPCCardHTML(npc, index, isConverted);
+    }).join('')}
                 </div>
             </div>
         </div>
@@ -455,32 +455,6 @@ export function bindEvents(container, { memoryService }) {
     mountWorldNetGraph(container, {
         activeId: getActiveCharacterIdFromStorage()
     });
-    const graphStyleSelect =
-        container.querySelector(
-            '#worldnetGraphStyle'
-        );
-
-    if (graphStyleSelect) {
-        graphStyleSelect.value =
-            getWorldNetGraphVersion();
-
-        graphStyleSelect.addEventListener(
-            'change',
-            () => {
-                const version =
-                    setWorldNetGraphVersion(
-                        graphStyleSelect.value
-                    );
-
-                graphStyleSelect.value = version;
-
-                showAlert(
-                    '请退出并重新进入角色网络以应用样式'
-                );
-            }
-        );
-    }
-
     // ---- ★ 转化确认页面的事件 ----
     const confirmBtn = container.querySelector('#confirmConvertBtn');
     if (confirmBtn) {

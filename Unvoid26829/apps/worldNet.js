@@ -9,10 +9,8 @@ import { archiveCharacter, deleteCharacterDeep } from './roleData.js';
 import {
     renderWorldNetGraph,
     mountWorldNetGraph,
-    unmountWorldNetGraph,
-    getWorldNetGraphVersion,
-    setWorldNetGraphVersion
-} from './worldNetGraphProvider.js';
+    unmountWorldNetGraph
+} from './worldNetGraphDemo.js';
 
 export const id = 'worldNetPage';
 export const label = '角色网络';

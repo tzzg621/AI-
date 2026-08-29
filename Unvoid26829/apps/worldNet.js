@@ -416,7 +416,7 @@ export function render({ memoryService }) {
     rebuildNpcList();  // ← 加这一行，切页面时读最新数据
     const convertedIds = getConvertedIds();
 
-    return `
+       return `
     <div class="screen-page">
         <div class="screen-header">
             <div class="screen-title">${title}</div>
@@ -424,38 +424,9 @@ export function render({ memoryService }) {
         </div>
         <div class="screen-content">
             <div class="page-card wn-page">
-                <div class="wn-graph-style-setting">
-                    <div>
-                        <strong>关系网样式</strong>
-                        <span>关系网样式将在下次进入角色网络时生效</span>
-                    </div>    
-                    <select
-                        id="worldnetGraphStyle"
-                        class="wn-input"
-                    >    
-                        <option
-                            value="demo"
-                            ${getWorldNetGraphVersion() === 'demo'
-            ? 'selected'
-            : ''
-        }   
-                        >   
-                            动态版  
-                        </option>    
-                        <option
-                            value="classic"
-                            ${getWorldNetGraphVersion() === 'classic'
-            ? 'selected'
-            : ''
-        }  
-                        >    
-                            标准版
-                        </option>   
-                    </select>        
-                </div>    
-                 ${renderWorldNetGraph({
-            activeId: getActiveCharacterIdFromStorage()
-        })}    
+                ${renderWorldNetGraph({
+        activeId: getActiveCharacterIdFromStorage()
+    })}   
 
                 <div class="wn-section-head">
                     <div>

@@ -1,0 +1,894 @@
+/* apps/worldNetGraphDemo.css - 世界关系网 Demo 视觉版 */
+
+.worldnet-graph-module {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    border: 1px solid rgba(78, 205, 196, 0.24);
+    border-radius: 16px;
+    color: #e8eef5;
+    background: #050810;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "PingFang SC",
+        "Microsoft YaHei",
+        sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.worldnet-graph-module *,
+.worldnet-graph-module *::before,
+.worldnet-graph-module *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    letter-spacing: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* ====================== Preview 横条卡片 ====================== */
+.worldnet-graph-module.worldnet-preview-mode {
+    height: 76px;
+}
+
+.worldnet-preview-open {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    height: 100%;
+    padding: 0 15px;
+    border: 0;
+    border-radius: 16px;
+    color: #fff;
+    background:
+        radial-gradient(circle at 75% 50%,
+            rgba(78, 205, 196, 0.18),
+            transparent 42%),
+        linear-gradient(135deg, #0c1220, #101b2d);
+    text-align: left;
+    cursor: pointer;
+}
+
+.worldnet-preview-open:active {
+    transform: scale(0.985);
+}
+
+.worldnet-preview-main {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 11px;
+}
+
+.worldnet-preview-icon {
+    display: grid;
+    width: 43px;
+    height: 43px;
+    flex: 0 0 43px;
+    place-items: center;
+    border: 1px solid rgba(78, 205, 196, 0.35);
+    border-radius: 13px;
+    background: rgba(78, 205, 196, 0.13);
+    font-size: 23px;
+}
+
+.worldnet-preview-copy {
+    display: block;
+    min-width: 0;
+}
+
+.worldnet-preview-copy strong,
+.worldnet-preview-copy small {
+    display: block;
+}
+
+.worldnet-preview-copy strong {
+    font-size: 15px;
+    letter-spacing: 0.02em;
+}
+
+.worldnet-preview-copy small {
+    margin-top: 4px;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.54);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.worldnet-preview-copy small b {
+    color: #4ECDC4;
+}
+
+.worldnet-preview-arrow {
+    flex: 0 0 auto;
+    margin-left: 10px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 29px;
+    font-weight: 200;
+}
+
+/* preview 模式下, 只显示 preview 卡片, 隐藏其他 */
+.worldnet-preview-mode .app-header,
+.worldnet-preview-mode .graph-wrap,
+.worldnet-preview-mode .legend,
+.worldnet-preview-mode .picker,
+.worldnet-preview-mode .detail-panel {
+    display: none;
+}
+
+/* ====================== Fullscreen 全屏关系网 ====================== */
+.worldnet-graph-module.worldnet-fullscreen-mode {
+    position: absolute;
+    inset: 0;
+    z-index: 900;
+
+    display: flex;
+    flex-direction: column;
+
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+
+    border: 0;
+    border-radius: 0;
+    background: #080d18;
+}
+
+.worldnet-fullscreen-mode .worldnet-preview-open {
+    display: none;
+}
+
+/* App Header */
+.worldnet-fullscreen-mode .app-header {
+    flex: 0 0 auto;
+    min-height: 58px;
+    padding:
+        calc(11px + env(safe-area-inset-top, 0px)) 14px 11px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    z-index: 5;
+    background: linear-gradient(180deg,
+            rgba(5, 8, 16, 0.95) 0%,
+            rgba(5, 8, 16, 0) 100%);
+}
+
+.worldnet-fullscreen-mode .app-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+
+.worldnet-fullscreen-mode .app-title .main {
+    font-size: 18px;
+    font-weight: 700;
+    background: linear-gradient(90deg, #4ECDC4 0%, #FF6B9D 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.worldnet-fullscreen-mode .app-title .sub {
+    font-size: 11px;
+    opacity: 0.75;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.worldnet-fullscreen-mode .pov-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    background: rgba(78, 205, 196, 0.12);
+    border: 1px solid rgba(78, 205, 196, 0.3);
+    border-radius: 8px;
+    font-size: 10px;
+    color: #4ECDC4;
+    font-weight: 600;
+}
+
+.worldnet-fullscreen-mode .pov-tag::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #4ECDC4;
+}
+
+.worldnet-fullscreen-mode .center-name {
+    font-weight: 600;
+    color: #fff;
+}
+
+.worldnet-fullscreen-mode .header-btns {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.worldnet-fullscreen-mode .header-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.worldnet-fullscreen-mode .header-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.worldnet-fullscreen-mode .header-btn:active {
+    transform: scale(0.92);
+}
+
+.worldnet-fullscreen-mode .worldnet-fullscreen-close {
+    font-size: 21px;
+    line-height: 1;
+}
+
+/* Graph Container */
+.worldnet-fullscreen-mode .graph-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.worldnet-fullscreen-mode canvas#graph {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+}
+
+/* Long Press Indicator */
+.worldnet-fullscreen-mode .longpress-ring {
+    position: absolute;
+    pointer-events: none;
+    z-index: 7;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 107, 157, 0.6);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+    transition: opacity 0.1s, transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.worldnet-fullscreen-mode .longpress-ring.show {
+    opacity: 0.8;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.worldnet-fullscreen-mode .longpress-ring::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    border-top-color: #4ECDC4;
+    border-right-color: #4ECDC4;
+    transform: rotate(0deg);
+    transition: transform 0.5s linear;
+}
+
+.worldnet-fullscreen-mode .longpress-ring.show::after {
+    transform: rotate(360deg);
+}
+
+/* Character Picker */
+.worldnet-fullscreen-mode .picker {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 14, 26, 0.97);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 7;
+    display: flex;
+    flex-direction: column;
+    padding:
+        calc(24px + env(safe-area-inset-top, 0px)) 20px calc(20px + env(safe-area-inset-bottom, 0px));
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
+}
+
+.worldnet-fullscreen-mode .picker.hidden {
+    transform: translateY(-30px);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.worldnet-fullscreen-mode .picker-header {
+    margin-bottom: 16px;
+}
+
+.worldnet-fullscreen-mode .picker-header h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.worldnet-fullscreen-mode .picker-header p {
+    font-size: 12px;
+    opacity: 0.55;
+    line-height: 1.5;
+}
+
+.worldnet-fullscreen-mode .picker-search {
+    margin-bottom: 12px;
+    position: relative;
+}
+
+.worldnet-fullscreen-mode .picker-search input {
+    width: 100%;
+    padding: 10px 12px 10px 36px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    color: #fff;
+    font-size: 13px;
+    outline: none;
+}
+
+.worldnet-fullscreen-mode .picker-search input:focus {
+    border-color: rgba(78, 205, 196, 0.5);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.worldnet-fullscreen-mode .picker-search::before {
+    content: '🔍';
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    transform: translateY(-50%);
+    font-size: 13px;
+    opacity: 0.5;
+}
+
+.worldnet-fullscreen-mode .picker-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 4px;
+    margin-right: -4px;
+}
+
+.worldnet-fullscreen-mode .picker-list::-webkit-scrollbar {
+    width: 4px;
+}
+
+.worldnet-fullscreen-mode .picker-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+}
+
+.worldnet-fullscreen-mode .picker-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    opacity: 0.4;
+    margin: 8px 0 4px;
+    font-weight: 600;
+}
+
+.worldnet-fullscreen-mode .picker-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    color: #e8eef5;
+    background: rgba(255, 255, 255, 0.04);
+    text-align: left;
+    cursor: pointer;
+    transition:
+        background 0.15s,
+        border-color 0.15s,
+        transform 0.15s;
+}
+
+.worldnet-fullscreen-mode .picker-item:hover {
+    border-color: rgba(78, 205, 196, 0.22);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.worldnet-fullscreen-mode .picker-item:active {
+    transform: scale(0.985);
+}
+
+.worldnet-fullscreen-mode .picker-avatar {
+    display: grid;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    place-items: center;
+    border: 1px solid var(--node-color, #4ECDC4);
+    border-radius: 50%;
+    background:
+        linear-gradient(135deg,
+            var(--node-color, #4ECDC4),
+            #101827);
+    font-size: 20px;
+}
+
+.worldnet-fullscreen-mode .picker-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.worldnet-fullscreen-mode .picker-info strong,
+.worldnet-fullscreen-mode .picker-info small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.worldnet-fullscreen-mode .picker-info strong {
+    color: #f4f7fa;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.worldnet-fullscreen-mode .picker-info small {
+    margin-top: 3px;
+    color: rgba(232, 238, 245, 0.48);
+    font-size: 11px;
+}
+
+.worldnet-fullscreen-mode .picker-count {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    border-radius: 10px;
+    color: #4ECDC4;
+    background: rgba(78, 205, 196, 0.15);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Legend */
+.worldnet-fullscreen-mode .legend {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 10px 12px;
+    background: rgba(10, 14, 26, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    z-index: 4;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.worldnet-fullscreen-mode .legend.hidden {
+    transform: translateY(calc(100% + 20px));
+}
+
+.worldnet-fullscreen-mode .legend-toggle {
+    position: absolute;
+    top: -32px;
+    right: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(10, 14, 26, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.worldnet-fullscreen-mode .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    opacity: 0.85;
+}
+
+.worldnet-fullscreen-mode .legend-line {
+    width: 16px;
+    height: 2px;
+    border-radius: 1px;
+}
+
+.worldnet-fullscreen-mode .legend-line.dashed {
+    background-image: linear-gradient(to right,
+            currentColor 50%,
+            transparent 50%);
+    background-size: 4px 2px;
+    background-repeat: repeat-x;
+    background-color: transparent !important;
+    height: 2px;
+}
+
+/* Detail Panel */
+.worldnet-fullscreen-mode .detail-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    background: #0a0e1a;
+    transform: translateX(100%);
+    transition: transform 0.36s cubic-bezier(0.22, 1, 0.36, 1);
+    z-index: 8;
+    display: flex;
+    flex-direction: column;
+    padding:
+        calc(24px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: -24px 0 60px rgba(0, 0, 0, 0.6);
+    will-change: transform;
+}
+
+.worldnet-fullscreen-mode .detail-panel.open {
+    transform: translateX(0);
+}
+
+.worldnet-fullscreen-mode .detail-close {
+    position: absolute;
+    top: 14px;
+    right: 20px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 2;
+    opacity: 0;
+    transition:
+        opacity 0.3s 0.1s,
+        background 0.2s;
+}
+
+.worldnet-fullscreen-mode .detail-panel.open .detail-close {
+    opacity: 1;
+}
+
+.worldnet-fullscreen-mode .detail-close:hover {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+/* 详情面板内容默认隐藏, 打开后 stagger 淡入 */
+.worldnet-fullscreen-mode .detail-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+        opacity 0.32s ease-out,
+        transform 0.36s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.worldnet-fullscreen-mode .detail-section {
+    margin-top: 20px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+        opacity 0.32s ease-out,
+        transform 0.36s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.worldnet-fullscreen-mode .detail-action {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+        opacity 0.32s ease-out,
+        transform 0.36s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.worldnet-fullscreen-mode .detail-panel.open .detail-header {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0.10s;
+}
+
+.worldnet-fullscreen-mode .detail-panel.open .section-bio {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0.18s;
+}
+
+.worldnet-fullscreen-mode .detail-panel.open .section-tags {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0.24s;
+}
+
+.worldnet-fullscreen-mode .detail-panel.open .section-rels {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0.30s;
+}
+
+.worldnet-fullscreen-mode .detail-panel.open .detail-action {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0.36s;
+}
+
+.worldnet-fullscreen-mode .detail-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: linear-gradient(135deg,
+            var(--avatar-from, #4ECDC4),
+            var(--avatar-to, #FF6B9D));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    flex-shrink: 0;
+}
+
+.worldnet-fullscreen-mode .detail-name {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.worldnet-fullscreen-mode .detail-role {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.worldnet-fullscreen-mode .detail-section h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    opacity: 0.5;
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+.worldnet-fullscreen-mode .detail-bio {
+    font-size: 13px;
+    line-height: 1.6;
+    opacity: 0.85;
+}
+
+.worldnet-fullscreen-mode .detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.worldnet-fullscreen-mode .detail-tag {
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.worldnet-fullscreen-mode .detail-action-btn {
+    padding: 12px 16px;
+    background: rgba(78, 205, 196, 0.1);
+    border: 1px solid rgba(78, 205, 196, 0.3);
+    border-radius: 12px;
+    color: #4ECDC4;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.worldnet-fullscreen-mode .detail-action-btn:hover {
+    background: rgba(78, 205, 196, 0.2);
+}
+
+.worldnet-fullscreen-mode .detail-action-btn:active {
+    transform: scale(0.97);
+}
+
+.worldnet-fullscreen-mode .detail-action-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.worldnet-fullscreen-mode .rel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.worldnet-fullscreen-mode .rel-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 10px;
+    border-left: 3px solid var(--rel-color, #888);
+}
+
+.worldnet-fullscreen-mode .rel-item .rel-name {
+    font-size: 13px;
+    font-weight: 600;
+    flex: 1;
+}
+
+.worldnet-fullscreen-mode .rel-item .rel-type {
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.worldnet-fullscreen-mode .rel-item .rel-arrow {
+    font-size: 10px;
+    opacity: 0.5;
+    color: #4ECDC4;
+}
+
+.worldnet-fullscreen-mode .rel-empty {
+    font-size: 12px;
+    opacity: 0.5;
+    padding: 8px 0;
+    text-align: center;
+}
+
+/* Tooltip */
+.worldnet-fullscreen-mode .tooltip {
+    position: absolute;
+    padding: 6px 10px;
+    background: rgba(10, 14, 26, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    pointer-events: none;
+    transform: translate(-50%, -130%);
+    white-space: nowrap;
+    z-index: 6;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.worldnet-fullscreen-mode .tooltip.show {
+    opacity: 1;
+}
+
+/* Hint */
+.worldnet-fullscreen-mode .hint {
+    position: absolute;
+    bottom: 84px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 1;
+    text-align: center;
+    background: rgba(10, 14, 26, 0.6);
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.worldnet-fullscreen-mode .hint.hidden {
+    display: none;
+}
+
+.worldnet-fullscreen-mode .kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    font-size: 10px;
+    margin: 0 2px;
+}
+
+.worldnet-fullscreen-mode .detail-avatar {
+    display: grid;
+    overflow: hidden;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
+    border-radius: 50%;
+    background:
+        linear-gradient(
+            135deg,
+            var(--avatar-from, #4ECDC4),
+            var(--avatar-to, #FF6B9D)
+        );
+    font-size: 32px;
+}
+
+.worldnet-fullscreen-mode .detail-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+}
+
+.worldnet-fullscreen-mode .rel-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+
+.worldnet-fullscreen-mode .rel-avatar {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 16px;
+}
+
+.worldnet-fullscreen-mode .rel-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.worldnet-fullscreen-mode .rel-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

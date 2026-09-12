@@ -9,6 +9,8 @@
 // - 只存角色 id（关联角色），不复制角色卡正文。
 // - 占用判定 = sessions 里 status ∈ {forming, ongoing} 且 participantIds 含该 id（跨桌、跨分类互斥）。
 // - 一类房间下可以同时存在多张桌：sessions 里同 typeId 的多条记录，各占一个 tableNo。
+// - session 是自由结构（phase/votes/revealMode 明牌暗牌等字段由引擎与界面往上挂）：
+//   新加字段只要不建索引就不用升 DB_VERSION，老记录缺字段时由读侧兜底。
 
 const DB_NAME = 'werewolfDB';
 const DB_VERSION = 2;

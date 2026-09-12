@@ -11,7 +11,8 @@ import { getAllCharacterIds, getCharacterNameById } from '../characterManager.js
 import { getAvatarHtml } from '../../store/ImageCache.js';
 import { esc } from '../../store/utils.js';
 import {
-    ROOM_TYPES, getRoomType, getBoard, MARK_TAGS, buildRulesPage, roleLabel, randomNpcIdentity
+    ROOM_TYPES, getRoomType, getBoard, MARK_TAGS, buildRulesPage, roleLabel, randomNpcIdentity,
+    revealModeOf, revealLabel
 } from './werewolfRooms.js';
 import * as store from './werewolfStore.js';
 import * as engine from './werewolfEngine.js';
@@ -61,6 +62,8 @@ export async function start(overlay, globalState, onBack) {
         session: null,        // 当前正在看的桌
         readonly: false,      // 旁观 / 非参与者时为 true
         busy: false,
+        wolfPick: null,       // 狼队这一刀我挑的座号（还没提交给队友，只在内存里）
+        wolfNote: '',         // 我留给队友的那句话
         inflight: new Map(),  // inviteId -> { characterId, seat, name }：还在飞的邀请
         closed: false
     };
@@ -407,7 +410,7 @@ function renderTypeCard(app, type) {
     const board = getBoard(type.boardId);
     const tables = tablesOf(app, type.typeId);
     const mine = tables.find(s => iAmIn(s, app));
-    const meta = `${board.label} · ${board.seats} 人 · ${tables.length ? `${tables.length} 张桌在开` : '还没开桌'}`;
+    const meta = `${board.label} · ${board.seats} 人 · ${revealLabel(type.reveal)} · ${tables.length ? `${tables.length} 张桌在开` : '还没开桌'}`;
 
     return `
         <button class="ww-card ww-type-card" data-type="${type.typeId}">
@@ -437,7 +440,7 @@ function renderTypePage(app) {
             <div class="ww-card-icon">📖</div>
             <div class="ww-card-main">
                 <div class="ww-card-title">规则与角色</div>
-                <div class="ww-card-desc">${esc(type.desc)}｜单次发言上限约 ${type.speechLimit} 字</div>
+                <div class="ww-card-desc">${esc(type.desc)}｜${esc(revealLabel(type.reveal))}局｜单次发言上限约 ${type.speechLimit} 字</div>
             </div>
             <span class="ww-card-go">查看 ›</span>
         </button>
@@ -546,7 +549,7 @@ function renderRoom(app) {
     return `
         <div class="ww-section-title">
             <strong>${esc(session.name || type?.name || '这一桌')}</strong>
-            <span>${(session.seats || []).length}/${board.seats} 人</span>
+            <span>${esc(`${revealLabel(revealModeOf(session))} · ${(session.seats || []).length}/${board.seats} 人`)}</span>
         </div>
 
         <div class="ww-seats ${board.columns === 1 ? 'single' : ''}">
@@ -622,6 +625,30 @@ function mySeatOf(app, session) {
     return (session?.seats || []).find(s => s.characterId && s.characterId === app.me) || null;
 }
 
+/**
+ * 夜里这一步该不该我亲手做：'guard' | 'wolf' | 'seer' | 'hunter' | null（不属于我就交给 AI）。
+ * 只看「阶段 + 我在这一局里的身份」，**不能拿 ai.defaultActor 比对**——狼永远返回座号最小的活狼，
+ * 坐在 4 号的狼玩家会永远轮不到自己动手。
+ * 猎人那一条必须在「我还活着」之前判：轮到他开枪的时候他已经出局了。
+ */
+function myNightDuty(app, session) {
+    if (!session || app.readonly || isOver(session)) return null;
+    const mine = mySeatOf(app, session);
+    if (!mine) return null;
+    if (session.phase === 'hunter_shot') return session.pendingShot?.seat === mine.seat ? 'hunter' : null;
+    if (mine.alive === false) return null;
+    if (session.phase === 'night_guard') return mine.role === 'guard' ? 'guard' : null;
+    if (session.phase === 'night_wolf') return mine.role === 'werewolf' ? 'wolf' : null;
+    if (session.phase === 'night_seer') return mine.role === 'seer' ? 'seer' : null;
+    return null;
+}
+
+/** 还活着的狼队友（wolvesOf 含死人，得自己过一遍）；我是独狼时为 null */
+function wolfMateOf(app, session, mine) {
+    if (!mine || mine.role !== 'werewolf') return null;
+    return engine.wolvesOf(session).find(s => s.alive !== false && s.seat !== mine.seat) || null;
+}
+
 function isOver(session) {
     return !session || session.status === 'ended' || session.status === 'voided' || session.phase === 'ended';
 }
@@ -633,11 +660,12 @@ function isOver(session) {
  */
 function visibleRoleOf(app, session, seat) {
     if (!seat?.role) return '';
-    if (isOver(session)) return roleLabel(seat.role);
     const mine = mySeatOf(app, session);
-    if (!mine) return '';
-    if (seat.seat === mine.seat) return roleLabel(seat.role);
-    if (mine.role === 'werewolf' && seat.role === 'werewolf') return roleLabel(seat.role);
+    if (isOver(session)) return roleLabel(seat.role);                 // 局终：全场公开
+    if (mine && seat.seat === mine.seat) return roleLabel(seat.role); // 自己的底牌
+    // 明牌局：出局就公开身份（流水里已经公告过，围观的人也看得到）
+    if (revealModeOf(session) === 'open' && seat.alive === false) return roleLabel(seat.role);
+    if (mine && mine.role === 'werewolf' && seat.role === 'werewolf') return roleLabel(seat.role); // 狼看同伴
     return '';
 }
 
@@ -657,8 +685,9 @@ function turnHint(app, session) {
     const at = seat => (seat ? `${seat.seat} 号 ${seat.name}` : '');
     const isMine = seat => !!mine && seat?.seat === mine.seat;
     switch (session.phase) {
-        case 'night_wolf': return '狼队正在商量';
-        case 'night_seer': return '预言家正在验人';
+        case 'night_guard': return myNightDuty(app, session) === 'guard' ? '轮到你守人' : '守卫正在守人';
+        case 'night_wolf': return myNightDuty(app, session) === 'wolf' ? '轮到你下刀（先跟队友商量）' : '狼队正在商量';
+        case 'night_seer': return myNightDuty(app, session) === 'seer' ? '轮到你验人' : '预言家正在验人';
         case 'night_resolve': return '等天亮';
         case 'dawn': return '天亮了';
         case 'day_speak': {
@@ -667,10 +696,19 @@ function turnHint(app, session) {
         }
         case 'day_vote': {
             const seat = engine.currentVoter(session);
-            return seat ? (isMine(seat) ? '轮到你投票' : `轮到 ${at(seat)} 投票`) : '';
+            const votes = session.votes || {};
+            const progress = `（${Object.keys(votes).length}/${engine.aliveSeats(session).length}）`;
+            // 票是静默的：投过之后流里看不到自己那一票，进度只能靠这里给
+            if (!seat) return '等开票';
+            if (isMine(seat)) return `轮到你投票${progress}`;
+            if (mine && Object.prototype.hasOwnProperty.call(votes, mine.seat)) return `你已投票，等其他人${progress}`;
+            return `轮到 ${at(seat)} 投票${progress}`;
         }
         case 'day_verdict': return '等开票';
-        case 'hunter_shot': return `${session.pendingShot ? at(session.pendingShot) : '猎人'} 要开枪`;
+        case 'hunter_shot': {
+            if (myNightDuty(app, session) === 'hunter') return '轮到你决定开不开枪';
+            return `${session.pendingShot ? at(session.pendingShot) : '猎人'} 要开枪`;
+        }
         default: return '';
     }
 }
@@ -695,6 +733,7 @@ function renderIdentityCard(app, session, mine) {
     if (!view) return '';
     const wolf = view.faction === 'wolf';
     const checks = view.checks || [];
+    const guarded = view.guarded || [];
     return `
         <section class="ww-identity ${wolf ? 'wolf' : 'good'}">
             <div class="ww-identity-head">
@@ -702,7 +741,14 @@ function renderIdentityCard(app, session, mine) {
                 <strong>${esc(`${view.roleLabel} · ${wolf ? '狼人阵营' : '好人阵营'}`)}</strong>
             </div>
             ${view.teammates?.length ? `<p>狼同伴：${esc(view.teammates.map(t => `${t.seat} 号 ${t.name}`).join('、'))}</p>` : ''}
-            ${checks.length ? `<p>验过的人：${esc(checks.map(c => `${c.seat} 号 ${c.name} 是${c.isWolf ? '狼人' : '好人'}`).join('；'))}</p>` : ''}
+            ${checks.length ? `<p>验过的人：${checks.map((c, i) => {
+                const one = esc(`${c.seat} 号 ${c.name} 是${c.isWolf ? '狼人' : '好人'}`);
+                return i === checks.length - 1 ? `<em class="ww-check-latest">${one}</em>` : one;
+            }).join('；')}</p>` : ''}
+            ${guarded.length ? `<p>守过的人：${guarded.map((g, i) => {
+                const one = esc(`第 ${g.round} 夜 ${g.seat} 号 ${g.name}`);
+                return i === guarded.length - 1 ? `<em class="ww-check-latest">${one}</em>` : one;
+            }).join('；')}</p>` : ''}
         </section>
     `;
 }
@@ -732,9 +778,15 @@ function renderTableSeat(app, session, seat, mine, over) {
     `;
 }
 
-/** 公开事件流水：发言带头像与名字，其余是系统行 */
+/**
+ * 事件流水：发言带头像与名字，其余是系统行。
+ * 公开事件谁都看得到；狼队频道（isPublic 为假）只给「这一局里我是狼」的那块屏幕——
+ * 判定按**渲染这一刻**的视角算，旁观者与其他人一个字都拿不到。
+ */
 function renderFeed(app, session, mine) {
-    const events = session.events || [];
+    const isWolf = !!mine && mine.role === 'werewolf';
+    const events = (session.events || []).filter(ev =>
+        ev.isPublic !== false || (isWolf && ev.type === 'wolfchat'));
     if (!events.length) return `<div class="ww-empty">还没发生什么</div>`;
     return events.map(ev => {
         if (ev.type === 'speak') {
@@ -753,12 +805,13 @@ function renderFeed(app, session, mine) {
             `;
         }
         const night = ev.type === 'system' && /夜/.test(ev.text || '');
+        const whisper = ev.isPublic === false;
         const icon = FEED_ICON[ev.type] || '';
-        return `<div class="ww-line system ${night ? 'night' : ''}">${icon ? `${icon} ` : ''}${esc(ev.text || '')}</div>`;
+        return `<div class="ww-line system ${night ? 'night' : ''} ${whisper ? 'whisper' : ''}">${icon ? `${icon} ` : ''}${esc(ev.text || '')}</div>`;
     }).join('');
 }
 
-const FEED_ICON = { death: '⚰️', vote: '🗳️', verdict: '⚖️', shot: '🔫', end: '🏁' };
+const FEED_ICON = { death: '⚰️', vote: '🗳️', tally: '📊', verdict: '⚖️', shot: '🔫', end: '🏁', wolfchat: '🐺' };
 
 /** 结束（或流局）之后的那一小段结算：谁能赢、谁活到了最后 */
 function renderEnding(app, session, mine) {
@@ -817,6 +870,10 @@ function renderTableBottom(app) {
         return `<footer class="ww-bottom"><button class="primary" disabled>⏳ 等 AI 回话…</button></footer>`;
     }
 
+    // 夜里轮到我：我的身份我自己动手（不想动手就点「让 AI 决定」）
+    const duty = myNightDuty(app, session);
+    if (duty) return renderNightAct(app, session, mine, duty);
+
     const speaker = session.phase === 'day_speak' ? engine.currentSpeaker(session) : null;
     const voter = session.phase === 'day_vote' ? engine.currentVoter(session) : null;
     // 轮到我：发言框 / 投票点选；否则给出「让某位 AI 行动」那一个按钮
@@ -826,6 +883,8 @@ function renderTableBottom(app) {
     const act = label => `<footer class="ww-bottom"><button id="wwAct" class="primary">${esc(label)}</button></footer>`;
     const advance = label => `<footer class="ww-bottom"><button id="wwAdvance" class="primary">${esc(label)}</button></footer>`;
     switch (session.phase) {
+        // 文案不随存活状态变：守卫不在世时这一步点一下就过去，按钮换个说法等于公告「守卫死了」
+        case 'night_guard': return act('让守卫守护');
         case 'night_wolf': return act('让狼队行动');
         case 'night_seer': return act('让预言家验人');
         case 'night_resolve': return advance('公布今晚的结果');
@@ -856,6 +915,11 @@ function renderComposer(app, session) {
     `;
 }
 
+/** 交给 AI 的那个按钮：白天投完票、夜里三步，出处都在这儿（data-delegate 分派） */
+function renderDelegate(kind) {
+    return `<div class="ww-composer-row"><button id="wwDelegate" class="ghost" data-delegate="${kind}">让 AI 决定</button></div>`;
+}
+
 function renderVoteRow(app, session, mine) {
     const targets = engine.aliveSeats(session).filter(s => s.seat !== mine.seat);
     return `
@@ -865,6 +929,83 @@ function renderVoteRow(app, session, mine) {
                 ${targets.map(t => `<button class="ww-mark-chip" data-vote="${t.seat}">${t.seat} 号 ${esc(t.name)}</button>`).join('')}
                 <button class="ww-mark-chip" data-vote="0">弃票</button>
             </div>
+            ${renderDelegate('vote')}
+        </footer>
+    `;
+}
+
+/**
+ * 轮到我动手的夜间行动条，跟投票行同一套手感：点一下就是决定。
+ * 只有狼多一步（先挑目标、给队友留一句话，提交之后 AI 队友各自复议）。
+ * 目标一律取自 ai.nightTargets——跟 AI 与模板用的是同一个合法集，不会出现点得动却落不下的座号。
+ */
+function renderNightAct(app, session, mine, kind) {
+    const targets = ai.nightTargets(session, kind, mine.seat);
+    const nameOf = seatNo => `${seatNo} 号 ${engine.seatAt(session, seatNo)?.name || ''}`;
+    const chip = (target, label, active) =>
+        `<button class="ww-mark-chip ${active ? 'active' : ''}" data-night="${kind}" data-target="${target}">${esc(label)}</button>`;
+
+    // 守卫：上一夜守过的那位**连渲染都不渲染**（引擎必拒，点了也落不下），
+    // 剩下的就是 ai.nightTargets 给的合法集。提示里可以点名「昨晚守过 N 号」——那是他自己干的事。
+    if (kind === 'guard') {
+        const warned = engine.lastGuardTarget(session, mine.seat);
+        return `
+            <footer class="ww-bottom column">
+                <div class="ww-hint">今晚守谁：点一个人，他当夜不会被刀。${warned ? `昨晚守过 ${nameOf(warned)}，今晚不能接着守。` : ''}</div>
+                <div class="ww-vote-row">${targets.map(t => chip(t, nameOf(t), false)).join('')}</div>
+                ${renderDelegate('guard')}
+            </footer>
+        `;
+    }
+
+    if (kind === 'wolf') {
+        const mate = wolfMateOf(app, session, mine);
+        if (!mate) {
+            return `
+                <footer class="ww-bottom column">
+                    <div class="ww-hint">没有同伴了，这一刀你自己定。</div>
+                    <div class="ww-vote-row">${targets.map(t => chip(t, nameOf(t), false)).join('')}</div>
+                    ${renderDelegate('wolf')}
+                </footer>
+            `;
+        }
+        return `
+            <footer class="ww-bottom column">
+                <div class="ww-hint">今晚刀谁：先点一个，再给队友留一句话。他看过会自己再提一个，你俩说的不一样就随机取一个。</div>
+                <div class="ww-vote-row">${targets.map(t => chip(t, nameOf(t), app.wolfPick === t)).join('')}</div>
+                <textarea id="wwNote" class="ww-input ww-note" maxlength="60" placeholder="留给队友的话（可留空）">${esc(app.wolfNote || '')}</textarea>
+                <div class="ww-composer-row">
+                    <button id="wwDelegate" class="ghost" data-delegate="wolf">让 AI 决定</button>
+                    <button id="wwSubmit" class="primary" ${app.wolfPick ? '' : 'disabled'}>提交给队友</button>
+                </div>
+            </footer>
+        `;
+    }
+
+    if (kind === 'seer') {
+        const seen = new Map((engine.viewOf(session, mine.seat)?.checks || []).map(c => [c.seat, c]));
+        return `
+            <footer class="ww-bottom column">
+                <div class="ww-hint">今晚验谁：点一下就能看到结果，只有你自己知道。</div>
+                <div class="ww-vote-row">
+                    ${targets.map(t => {
+                        const c = seen.get(t);
+                        return chip(t, c ? `${nameOf(t)}（验过：${c.isWolf ? '狼人' : '好人'}）` : nameOf(t), false);
+                    }).join('')}
+                </div>
+                ${renderDelegate('seer')}
+            </footer>
+        `;
+    }
+
+    return `
+        <footer class="ww-bottom column">
+            <div class="ww-hint">你出局了：可以带走一个人，也可以弃枪。</div>
+            <div class="ww-vote-row">
+                ${targets.map(t => chip(t, nameOf(t), false)).join('')}
+                ${chip(0, '弃枪', false)}
+            </div>
+            ${renderDelegate('hunter')}
         </footer>
     `;
 }
@@ -912,6 +1053,7 @@ function speakTurn(app, close, seatNo, type) {
         call: s => ai.speakCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
             ai.mergeLabels(s, seatNo, res?.marks || {});
+            engine.addNote(s,seatNo, { kind: 'speak', text: res?.note });
             return engine.applySpeech(s, seatNo, res?.text || ai.fallbackSpeech(seatNo));
         }
     });
@@ -922,15 +1064,64 @@ function voteTurn(app, close, seatNo, type) {
         call: s => ai.voteCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
             ai.mergeLabels(s, seatNo, res?.marks || {});
+            engine.addNote(s,seatNo, { kind: 'vote', text: res?.note });
             return engine.applyVote(s, seatNo, res?.vote ?? null);
         }
     });
 }
 
+/** 狼队夜里走 wolfPackTurn（一次调用扮演全队）；这里只管 seer / guard / hunter 这三个单座位决策 */
 function nightTurn(app, close, kind) {
+    if (kind === 'wolf') return packTurn(app, close, { player: null });
     return runTurn(app, close, {
         call: s => ai.nightAction({ session: s, kind }),
-        apply: (s, res) => applyNightDecision(s, kind, res?.target ?? null)
+        apply: (s, res) => {
+            // 笔记先记（此时阶段还没推走，defaultActor 拿到的就是刚刚行动的那个人）
+            engine.addNote(s, ai.defaultActor(s, kind), { kind, text: res?.note });
+            return applyNightDecision(s, kind, res?.target ?? null);
+        }
+    });
+}
+
+/**
+ * 狼队：一次调用扮演**要交给 AI 的那几只狼**（每只狼各自的视角入场、各自的行为出场）。
+ * player 是主视角的提案（他亲手提刀时才有）；他是狼点「让 AI 决定」、或者他根本不是狼（旁观/好人看 AI 打）时都给 null。
+ *
+ * 主视角那一座只有在他已经亲手提过刀时才排除（他那一票不该由 AI 代打）；
+ * 托管时连他自己那一座一起交给 AI 扮演——不然独狼托管会因为「一只可扮演的狼都没有」卡死在夜里。
+ */
+function packTurn(app, close, { player = null } = {}) {
+    const mine = mySeatOf(app, app.session);
+    const skip = player ? mine?.seat : null;
+    return runTurn(app, close, {
+        call: s => ai.wolfPackAction({
+            session: s,
+            actorSeats: engine.aliveSeats(s)
+                .filter(x => x.role === 'werewolf' && x.seat !== skip)
+                .map(x => x.seat),
+            player
+        }),
+        apply: (s, res) => applyWolfPack(s, res, player)
+    });
+}
+
+/**
+ * 狼队结果落库：每只狼各记一条自己的笔记，再交给引擎写频道 + 定刀口。
+ * 降级（超时/没等到回话）时 AI 狼等于没表态——既不顶掉主视角的选择，也不参与合并；
+ * 但没有主视角提案的那条路（整队交给 AI）不能跟着弃权，那会把这一夜空成死局。
+ */
+function applyWolfPack(s, res, player) {
+    const usable = (player && res?.degraded) ? [] : (res?.wolves || []);
+    const plans = usable.map(w => {
+        engine.addNote(s, w.seat, { kind: 'wolf', text: w.note });
+        return { seat: w.seat, target: w.target, reason: w.reason || '' };
+    });
+    if (player && player.target != null) plans.push({ seat: player.seat, target: player.target, reason: '' });
+    return engine.applyWolfPlan(s, {
+        plans,
+        chat: res?.chat || [],
+        playerSeat: player?.seat ?? null,
+        note: player?.note || ''
     });
 }
 
@@ -944,6 +1135,8 @@ function applyNightDecision(s, kind, target) {
     const pick = legal.includes(target) ? target : (ai.templateNightTarget(s, kind, who) ?? null);
     if (kind === 'wolf') return engine.applyWolfKill(s, pick) || skipNight(s, 'night_resolve');
     if (kind === 'seer') return engine.applySeerCheck(s, who, pick) || skipNight(s, 'night_resolve');
+    // 守卫推的是 night_wolf（他后面才是狼），别推 night_resolve——那会把狼的一夜跳过去
+    if (kind === 'guard') return engine.applyGuard(s, who, pick) || skipNight(s, 'night_wolf');
     return engine.applyHunterShot(s, pick);
 }
 
@@ -957,8 +1150,19 @@ async function runTableAction(app, close) {
     const session = app.session;
     if (!session || app.busy) return;
     const type = getRoomType(session.typeId);
+    // 轮到我动手时底部是选人条，#wwAct 根本不渲染；这一行只是防脏 DOM 的兜底
+    if (myNightDuty(app, session)) return;
+    if (session.phase === 'night_guard') {
+        // 阶段固定走，但场上没有活守卫时不必白打一次 AI：交给本地推进那一步（按钮文案照旧，看不出差别）
+        if (!engine.hasLiveRole(session, 'guard')) return runTableAdvance(app, close);
+        return nightTurn(app, close, 'guard');
+    }
     if (session.phase === 'night_wolf') return nightTurn(app, close, 'wolf');
-    if (session.phase === 'night_seer') return nightTurn(app, close, 'seer');
+    if (session.phase === 'night_seer') {
+        // 阶段固定走，但场上没人可验时不必白打一次 AI：交给本地推进那一步（按钮文案照旧，看不出差别）
+        if (!engine.seatsOfRole(session, 'seer').some(s => s.alive !== false)) return runTableAdvance(app, close);
+        return nightTurn(app, close, 'seer');
+    }
     if (session.phase === 'hunter_shot') return nightTurn(app, close, 'hunter');
     if (session.phase === 'day_speak') {
         const seat = engine.currentSpeaker(session);
@@ -975,14 +1179,36 @@ async function runTableAdvance(app, close) {
     const session = app.session;
     if (!session || app.busy) return;
     const phase = session.phase;
-    await mutateSession(app, session.id, s => {
+    const out = await mutateSession(app, session.id, s => {
         if (s.phase !== phase) return null;
         if (phase === 'night_resolve') { engine.settleNight(s); return true; }
+        // 守卫不在世时的 night_guard：阶段照走，点一下就过去（后面接的是狼，不是结算）
+        if (phase === 'night_guard') {
+            if (engine.hasLiveRole(s, 'guard')) return null;
+            s.phase = 'night_wolf';
+            return true;
+        }
+        // 预言家不在世时的 night_seer：阶段照走，点一下就过去
+        if (phase === 'night_seer') {
+            if (engine.seatsOfRole(s, 'seer').some(x => x.alive !== false)) return null;
+            s.phase = 'night_resolve';
+            return true;
+        }
         if (phase === 'dawn') return engine.startDay(s);
         if (phase === 'day_verdict') { engine.settleVote(s); return true; }
         return null;
     });
     renderApp(app, close);
+
+    // 暗牌局：技能的决策并进这一拍——不停在「猎人开枪」阶段，免得阶段条与按钮把死者身份说破。
+    // 明牌局照旧分步。例外：死者就是玩家自己时必须停下来让他决定（这一步只有他自己看得见，
+    // 他本来就知道自己的底牌；不停下来他就永远没机会开枪）。
+    const now = app.session;
+    const mineNow = mySeatOf(app, now);
+    if (out && now && now.pendingShot && revealModeOf(now) !== 'open'
+        && now.pendingShot.seat !== mineNow?.seat) {
+        return nightTurn(app, close, 'hunter');
+    }
 }
 
 /** 玩家自己发言：手打，或者代笔之后发出去（这一步不打 AI） */
@@ -1020,6 +1246,8 @@ async function ghostSpeak(app, close) {
 
     if (res && !res.degraded) app.draft = res.text;
     await mutateSession(app, session.id, s => {
+        // 代笔写出来的东西算「AI 替主视角做的判断」，笔记记在**主视角自己**的座位上
+        engine.addNote(s, mine.seat, { kind: 'ghost', text: res?.note });
         if (!willCall) return true;
         s.callCount = (s.callCount || 0) + 1;
         ai.afterCall(s, { ok: !res?.degraded });
@@ -1040,11 +1268,102 @@ async function castMyVote(app, close, target) {
     if (!ok) toast(app, '这一票没记上，再点一次试试');
 }
 
+/**
+ * 夜间选人条的点击总入口。
+ * 「不是我的回合就静默返回」同时挡掉三种噪声：双击的第二下、别人已经推进过、托管之后残留的点击。
+ */
+function onNightChip(app, close, kind, target) {
+    const session = app.session;
+    const mine = mySeatOf(app, session);
+    if (!session || !mine || app.busy) return;
+    if (myNightDuty(app, session) !== kind) return;
+    // 有队友的狼：点一下只是挑中（还要写话、还要提交），再点一下取消
+    if (kind === 'wolf' && wolfMateOf(app, session, mine)) {
+        app.wolfPick = app.wolfPick === target ? null : target;
+        renderApp(app, close);
+        return;
+    }
+    return actMyNight(app, close, kind, target);
+}
+
+/** 守卫守人 / 预言家验人 / 猎人开枪 / 独狼下刀：点一下就是决定，不打 AI */
+async function actMyNight(app, close, kind, target, note = '') {
+    const session = app.session;
+    const mine = mySeatOf(app, session);
+    if (!session || !mine || app.busy) return;
+    const before = session.phase;
+    const ok = await mutateSession(app, session.id, s => {
+        if (kind === 'wolf') {
+            return engine.applyWolfPlan(s, {
+                plans: [{ seat: mine.seat, target, reason: '' }],
+                playerSeat: mine.seat,
+                note
+            });
+        }
+        if (kind === 'guard') return engine.applyGuard(s, mine.seat, target);
+        if (kind === 'seer') return engine.applySeerCheck(s, mine.seat, target);
+        return engine.applyHunterShot(s, target === 0 ? null : target);   // 0 = 弃枪
+    });
+    renderApp(app, close);
+    if (!ok) {
+        // 只在局面真的没动时才提示；已经往前走过的那种「没生效」是正常的
+        if (app.session?.phase === before) toast(app, '这一步没生效，再点一次试试');
+        return;
+    }
+    if (kind === 'seer') {
+        const last = (engine.viewOf(app.session, mine.seat)?.checks || []).slice(-1)[0];
+        if (last) toast(app, `你验了 ${last.seat} 号 ${last.name}：${last.isWolf ? '狼人' : '好人'}`);
+    }
+    // 守没守中不告诉他：平安夜也可能是狼空刀，说破了就等于把守卫的规则白送
+    if (kind === 'guard') {
+        const seat = engine.seatAt(app.session, target);
+        if (seat) toast(app, `你今晚守着 ${seat.seat} 号 ${seat.name}`);
+    }
+}
+
+/**
+ * 狼队：把提案和留给队友的话交过去，AI 队友各按自己的视角复议一次，多数说了算（并列才随机）。
+ * 队友不在（被刀/被票出）就跳过 AI，我挑谁就是谁——别为了统一去空打一次 AI，
+ * 那会虚增 callCount、还会往 ai.fails 里记一次假成功。
+ */
+async function submitWolfPlan(app, close, { pick = null, note = '' } = {}) {
+    const session = app.session;
+    const mine = mySeatOf(app, session);
+    if (!session || !mine || app.busy) return;
+    if (myNightDuty(app, session) !== 'wolf') return;
+    if (pick == null) { toast(app, '先挑一个今晚的目标'); return; }
+    const mate = wolfMateOf(app, session, mine);
+    const text = String(note || '').trim().slice(0, 60);
+    app.wolfPick = null;
+    app.wolfNote = '';
+
+    if (!mate) return actMyNight(app, close, 'wolf', pick, text);
+
+    const out = await packTurn(app, close, { player: { seat: mine.seat, target: pick, note: text } });
+    if (out?.done && out.res?.degraded) toast(app, '队友没回话，就按你说的刀');
+}
+
+/** 这一步交给 AI：全走原来的那几个 turn，零新逻辑（我是狼时 packTurn 会连我一起替掉） */
+function delegateMyTurn(app, close, kind) {
+    const session = app.session;
+    const mine = mySeatOf(app, session);
+    if (!session || !mine || app.busy) return;
+    if (kind === 'vote') return voteTurn(app, close, mine.seat, getRoomType(session.typeId));
+    return nightTurn(app, close, kind);
+}
+
+/** 换桌 / 重开 / 离桌时把只在内存里的草稿清干净（跟 app.draft 一个性质，都不落库） */
+function resetTransient(app) {
+    app.draft = '';
+    app.wolfPick = null;
+    app.wolfNote = '';
+}
+
 /** 离开牌桌（局还在原地：回列表能看到「回到牌桌」） */
 async function leaveTable(app, close) {
     app.session = null;
     app.readonly = false;
-    app.draft = '';
+    resetTransient(app);
     app.page = { name: app.tab || 'rooms' };
     await refreshTables(app);
     renderApp(app, close);
@@ -1162,6 +1481,12 @@ function bindApp(app, close) {
     root.querySelectorAll('.ww-mark-chip[data-vote]').forEach(btn => {
         btn.addEventListener('click', () => castMyVote(app, close, Number(btn.dataset.vote)));
     });
+    root.querySelectorAll('.ww-mark-chip[data-night]').forEach(btn => {
+        btn.addEventListener('click', () => onNightChip(app, close, btn.dataset.night, Number(btn.dataset.target)));
+    });
+    root.querySelector('#wwNote')?.addEventListener('input', e => { app.wolfNote = e.target.value; });
+    root.querySelector('#wwSubmit')?.addEventListener('click', () => submitWolfPlan(app, close, { pick: app.wolfPick, note: app.wolfNote }));
+    root.querySelector('#wwDelegate')?.addEventListener('click', e => delegateMyTurn(app, close, e.currentTarget.dataset.delegate));
 }
 
 /** 进已有的桌：准备中 → 准备页；已开局 → 牌桌（参与）或旁观页 */
@@ -1172,7 +1497,7 @@ async function enterTable(app, close, sessionId) {
     if (!existing) { toast(app, '这一桌不在了'); return; }
     app.session = existing;
     app.readonly = !iAmIn(existing, app);
-    app.draft = '';
+    resetTransient(app);
 
     if (existing.status === 'forming') {
         app.page = { name: 'room', typeId: existing.typeId, sessionId: existing.id };
@@ -1204,6 +1529,8 @@ async function openTable(app, close, typeId) {
         tableNo,
         name: `第 ${tableNo} 桌`,
         boardId: getBoard(type.boardId).id,
+        // 出局信息公开方式跟着房型走（新手局明牌，速战/扮演暗牌）；存进本局，记录自带当时的规则
+        revealMode: type.reveal || 'hidden',
         status: 'forming',
         hostId: app.me,
         createdAt: Date.now(),
@@ -1212,6 +1539,8 @@ async function openTable(app, close, typeId) {
         log: [{ t: Date.now(), type: 'system', text: `${app.meName} 开了第 ${tableNo} 桌` }],
         marks: {},
         aiLabels: {},
+        // 各座位的 AI 私有笔记：发牌时由 startGame 清空，这里先占位（老记录读不到时按空处理）
+        aiNotes: {},
         events: [],
         round: 0,
         roundId: 0,
@@ -1576,7 +1905,7 @@ async function runStart(app, close) {
     }
 
     app.readonly = false;
-    app.draft = '';
+    resetTransient(app);
     app.page = { name: 'table', typeId: session.typeId, sessionId: sid };
     await refreshTables(app);
     renderApp(app, close);
@@ -1609,7 +1938,7 @@ function confirmGiveUp(app, close) {
                 }
                 app.session = null;
                 app.readonly = false;
-                app.draft = '';
+                resetTransient(app);
                 app.page = { name: 'type', typeId };
                 await refreshTables(app);
                 renderApp(app, close);

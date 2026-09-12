@@ -12,9 +12,9 @@ import { taskManager } from '../../store/AITaskManager.js';
 import { CharacterStore } from '../../store/CharacterStore.js';
 import { getVisibleProfile } from '../../store/profileAccess.js';
 import { getCharacterRecordById, getCharacterNameById } from '../characterManager.js';
-import { MARK_TAGS } from './werewolfRooms.js';
+import { MARK_TAGS, getBoard, boardProse } from './werewolfRooms.js';
 import {
-    seatAt, aliveSeats, wolvesOf, seatsOfRole, wolfTargets, seerTargets,
+    seatAt, aliveSeats, wolvesOf, seatsOfRole, wolfTargets, seerTargets, guardTargets,
     viewOf, publicFeed
 } from './werewolfEngine.js';
 
@@ -127,9 +127,14 @@ function seatLines(seated = [], freeSeats = []) {
 
 /* ---------------- 邀请（一次调用 = 一位被邀请者） ---------------- */
 
-const GAME_BRIEF = '「狼人杀」是一种靠发言和推理找出隐藏狼人的桌上游戏：'
-    + '每局 2 名狼人、1 名预言家、1 名猎人、2 名村民，身份由发牌随机决定，开局前谁也不知道自己拿到什么。'
-    + '玩法是白天轮流发言、一起投票放逐一个人，夜里狼人杀人、预言家查身份。';
+/**
+ * 规则简介（邀请与匹配共用）。板子构成按实际板子生成——换板子只改 BOARDS.roles，这里不用动。
+ */
+function gameBrief(board) {
+    return '「狼人杀」是一种靠发言和推理找出隐藏狼人的桌上游戏：'
+        + `每局 ${boardProse(board?.id)}，身份由发牌随机决定，开局前谁也不知道自己拿到什么。`
+        + '玩法是白天轮流发言、一起投票放逐一个人，夜里狼人杀人、有身份的人各自行动。';
+}
 
 /**
  * 邀请一位角色上桌
@@ -164,7 +169,7 @@ export async function inviteCharacter({ type, board, inviterId, inviterName, tar
         knowledge ? `\n【你认识的在场者】\n${knowledge}` : '',
         '',
         '【背景】',
-        GAME_BRIEF
+        gameBrief(board)
     ].filter(Boolean).join('\n');
 
     const userContent = [
@@ -250,7 +255,7 @@ export async function matchCharacters({ type, board, seated = [], freeSeats = []
 
     const systemPrompt = '你是一个桌游房间的入场模拟器。'
         + '给定若干被邀请上桌的角色，每个角色都带着自己的人设，以及他自己对场上其他人的了解。'
-        + `这一桌是${GAME_BRIEF}`
+        + `这一桌是${gameBrief(board)}`
         + '请模拟每个角色入座时的表现：他会挑哪个空座位，以及坐下后说的一句话。'
         + '每个角色只能基于【他自己的人设与他对场上这些人的了解】来行动，不要替别人说话，也不要编造他没有的认知。'
         + '性格外向的可能主动打招呼、对熟人说话，性格冷淡的可能只写「沉默」。'
@@ -302,7 +307,8 @@ export function parseMatchReply(raw) {
  *
  * 和邀请、匹配同一条边界：一次调用只装**一个座位此刻自己知道的事**（viewBlock）。
  * 全场身份表、他人的身份、他人的验人结果、任何人贴的标签都不进来。
- * 主视角的标记只有一个出口：ghostwrite（那是玩家让 AI 顺着自己的判断代笔）。
+ * 主视角的标记只有一个出口：ghostwrite（那是玩家让 AI 顺着自己的判断代笔）；
+ * 主视角对狼队友说的话也只有一个出口：wolfPackAction 的 player（**一次性入参**，不落 session、不进 events）。
  */
 
 /* ---- 调用模式（三级降级） ---- */
@@ -345,6 +351,24 @@ export function mergeLabels(session, seatNo, marks = {}) {
     all[seatNo] = { ...(all[seatNo] || {}), ...marks };
 }
 
+/* ---- 私有笔记（每个 AI 决策的副产物） ----
+ * 存储与写入在引擎（addNote，跟 seerLog/guardLog 一处），这里只管怎么讲给模型听。
+ */
+
+export const NOTES_IN_PROMPT = 6;        // 提示词里回灌最近几条
+
+/** 笔记抬头「第 N 夜 / 第 N 天」：夜里干的活按夜算，白天的按天算 */
+const NIGHT_KINDS = new Set(['wolf', 'seer', 'guard', 'hunter']);
+const NOTE_KIND_LABEL = {
+    wolf: '狼刀', seer: '验人', guard: '守人', hunter: '开枪',
+    speak: '发言', vote: '投票', ghost: '代笔'
+};
+
+function noteHead(note) {
+    const day = NIGHT_KINDS.has(note.kind) ? '夜' : '天';
+    return `第 ${note.round || 1} ${day}·${NOTE_KIND_LABEL[note.kind] || '判断'}`;
+}
+
 /* ---- 视角块 ---- */
 
 /**
@@ -366,6 +390,8 @@ function viewBlock(session, seatNo) {
     const knowledge = seat.kind === 'npc' ? '' : buildKnowledge(seat.characterId, others);
     const myLabels = (session.aiLabels || {})[seatNo] || {};
     const labelLine = Object.entries(myLabels).map(([s, t]) => `${s} 号=${t}`).join('、');
+    // 笔记只读**它自己**那一份：狼队批量调用时，每只狼的块里只有它自己写过的东西
+    const myNotes = (session.aiNotes || {})[seatNo] || [];
 
     return [
         '【你】',
@@ -376,10 +402,16 @@ function viewBlock(session, seatNo) {
         view.checks?.length
             ? `你验过的人：\n${view.checks.map(c => `- 第 ${c.round} 夜 ${c.seat} 号 ${c.name}：${c.isWolf ? '狼人' : '好人'}`).join('\n')}`
             : '',
+        view.guarded?.length
+            ? `你守过的人：\n${view.guarded.map(g => `- 第 ${g.round} 夜 ${g.seat} 号 ${g.name}`).join('\n')}`
+            : '',
         '',
         publicFeed(session),     // 自带「【场上】存活：…」这一段
         knowledge ? `\n【你对在场各人的了解】\n${knowledge}` : '',
-        labelLine ? `\n【你之前对他们的判断】\n${labelLine}` : ''
+        labelLine ? `\n【你之前对他们的判断】\n${labelLine}` : '',
+        myNotes.length
+            ? `\n【你自己之前记的笔记】\n${myNotes.slice(-NOTES_IN_PROMPT).map(n => `- ${noteHead(n)}：${n.text}`).join('\n')}`
+            : ''
     ].filter(Boolean).join('\n');
 }
 
@@ -388,10 +420,13 @@ function toneLine(type) {
     return type?.tone ? `这一桌的气氛：${type.tone}。` : '';
 }
 
-/** 角色扮演的通用头（每个对局内调用都用它做 systemPrompt 开头） */
-const ROLE_HEAD = '你在扮演一个角色，正在玩一桌狼人杀（2 狼人、1 预言家、1 猎人、2 村民，靠发言和投票找出狼人）。'
-    + '完全以这个角色的人设说话，用第一人称，不要跳出角色；'
-    + '不要提到「AI」「模型」「提示词」「系统」，不要替别人说话，不要复述规则。';
+/** 角色扮演的通用头（每个对局内调用都用它做 systemPrompt 开头）。板子构成按实际板子生成。 */
+function roleHead(session) {
+    return '你在扮演一个角色，正在玩一桌狼人杀（'
+        + `${boardProse(getBoard(session?.boardId).id)}，靠发言和投票找出狼人）。`
+        + '完全以这个角色的人设说话，用第一人称，不要跳出角色；'
+        + '不要提到「AI」「模型」「提示词」「系统」，不要替别人说话，不要复述规则。';
+}
 
 /* ---- 发言 ---- */
 
@@ -418,18 +453,19 @@ export function fallbackSpeech(seatNo) {
  */
 export async function speakCharacter({ session, seatNo, type }) {
     const limit = type?.speechLimit || 120;
-    const fallback = { text: fallbackSpeech(seatNo), marks: {}, degraded: true };
+    const fallback = { text: fallbackSpeech(seatNo), marks: {}, note: '', degraded: true };
     if (modeOf(session) === 'template') return { ...fallback, reason: 'template' };
 
-    const systemPrompt = [ROLE_HEAD, '', viewBlock(session, seatNo)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo)].join('\n');
     const userContent = [
         `轮到你发言了。${toneLine(type)}`,
         `请说一段自然的话（不超过 ${limit} 字）：可以表态、可以怀疑谁、可以解释自己，也可以顺着你之前的判断说。`,
         '只写你说出口的话，不要写「XX 说：」这样的前缀。',
         '',
-        '最后另起一行，可选地写下你此刻对其他人的判断（没有新想法就不写这行），格式必须完全一致：',
+        '最后另起两行，可选地写下此刻的判断与一句给自己留的笔记（没有就不写那行），格式必须完全一致：',
         '【判断】3号=狼人 5号=存疑',
-        `（标签只能用：${MARK_TAGS.join('、')}）`
+        '【笔记】私下记的一句话',
+        `（判断的标签只能用：${MARK_TAGS.join('、')}；笔记不会给别人看，是你自己的复盘素材）`
     ].join('\n');
 
     try {
@@ -446,13 +482,18 @@ export async function speakCharacter({ session, seatNo, type }) {
     }
 }
 
-/** 发言解析：正文 + 可选的【判断】行（判断行从正文里剔掉，只入标签） */
+/** 发言解析：正文 + 可选的【判断】行、可选的【笔记】行（标记行都从正文里剔掉） */
 export function parseSpeakReply(raw) {
     const text = String(raw || '');
     const judge = text.match(/【判断】\s*([^\n]*)/);
     const marks = parseMarks(judge?.[1] || '');
-    const body = text.replace(/【判断】[^\n]*/g, '').replace(/\n{3,}/g, '\n\n').trim();
-    return { text: stripQuotes(body), marks };
+    const note = String((text.match(/【笔记】\s*([^\n]*)/) || [])[1] || '').trim();
+    const body = text
+        .replace(/【判断】[^\n]*/g, '')
+        .replace(/【笔记】[^\n]*/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    return { text: stripQuotes(body), marks, note };
 }
 
 /**
@@ -461,7 +502,7 @@ export function parseSpeakReply(raw) {
  */
 export function parseMarks(text) {
     const out = {};
-    const re = /(\d{1,2})\s*号?\s*(?:=|＝|：|:|是|为|->|→)?\s*(狼人|狼|好人|预言家|猎人|村民|存疑|民)/g;
+    const re = /(\d{1,2})\s*号?\s*(?:=|＝|：|:|是|为|->|→)?\s*(狼人|狼|好人|预言家|守卫|猎人|村民|存疑|民)/g;
     let m;
     while ((m = re.exec(String(text || '')))) {
         const seat = Number(m[1]);
@@ -480,16 +521,16 @@ export function parseMarks(text) {
  */
 export async function voteCharacter({ session, seatNo, type }) {
     const legal = aliveSeats(session).filter(s => s.seat !== seatNo).map(s => s.seat);
-    const fallback = { vote: null, reason: '', marks: {}, degraded: true };
+    const fallback = { vote: null, reason: '', note: '', marks: {}, degraded: true };
     if (!legal.length || modeOf(session) === 'template') return { ...fallback, reason: 'template' };
 
-    const systemPrompt = [ROLE_HEAD, '', viewBlock(session, seatNo)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo)].join('\n');
     const userContent = [
         `投票时间。${toneLine(type)}`,
         `你要投一个人出局，或者弃票。可以投的座位：${legal.join('、')} 号。`,
         '输出 JSON，不要任何别的文字：',
-        '{"vote":座位号(数字，弃票写 null),"reason":"一句话理由","marks":{"座位号":"标签"}}',
-        `（marks 可省略；写的话标签只能用：${MARK_TAGS.join('、')}）`
+        '{"vote":座位号(数字，弃票写 null),"reason":"一句话理由","note":"你自己私下记的一句话","marks":{"座位号":"标签"}}',
+        `（note 与 marks 可省略；marks 的标签只能用：${MARK_TAGS.join('、')}）`
     ].join('\n');
 
     try {
@@ -509,6 +550,7 @@ export function parseVoteReply(raw, legal = []) {
     const pick = obj => ({
         vote: legal.includes(Number(obj?.vote)) ? Number(obj.vote) : null,
         reason: String(obj?.reason || '').trim(),
+        note: String(obj?.note || '').trim(),
         marks: parseMarks(typeof obj?.marks === 'string'
             ? obj.marks
             : Object.entries(obj?.marks || {}).map(([s, t]) => `${s}号=${t}`).join(' '))
@@ -521,7 +563,7 @@ export function parseVoteReply(raw, legal = []) {
     } catch { }
     const said = text.match(/(?:投|票给|出局)\s*(\d{1,2})\s*号/);
     const vote = said && legal.includes(Number(said[1])) ? Number(said[1]) : null;
-    return { vote, reason: stripQuotes(text.split('\n')[0] || ''), marks: parseMarks(text) };
+    return { vote, reason: stripQuotes(text.split('\n')[0] || ''), note: '', marks: parseMarks(text) };
 }
 
 /* ---- 夜晚：狼刀 / 验人 / 开枪 ---- */
@@ -529,31 +571,143 @@ export function parseVoteReply(raw, legal = []) {
 const NIGHT_ASK = {
     wolf: '你们狼队今晚要刀一个人。',
     seer: '你今晚要验一个人，验出他是好人还是狼人。',
+    guard: '你今晚要守护一个人，被守护的人当夜不会被刀；不能连续两夜守同一个人。',
     hunter: '你出局了，你是猎人，可以开枪带走场上一人，也可以弃枪。'
 };
 
 /**
- * 一次调用 = 一个夜晚决策（狼队一次调用，算整队的决定）
+ * 一次调用 = 扮演这一夜里**所有非主视角的狼**：每只狼各自的视角入场、各自的行为出场。
+ * 每个块只装那一位自己知道的事（本文件头部的红线：批量调用时块与块之间不串信息）。
+ * 主视角留在狼队频道的话与他的提案照旧是**一次性入参**：不落 session、不进 events、不进 viewBlock。
+ *
  * @param {object} p
- * @param {'wolf'|'seer'|'hunter'} p.kind
- * @param {number} [p.seatNo] 视角座位；不给就按 kind 推断（狼队取座号最小的活狼）
- * @returns {Promise<{target:number|null, reason:string, degraded:boolean}>}
+ * @param {object} p.session
+ * @param {number[]} p.actorSeats 这一夜要 AI 扮演的狼（不含主视角那一位）
+ * @param {{seat:number, target:number|null, note:string}|null} [p.player] 主视角的提案
+ * @returns {Promise<{wolves:Array<{seat:number,target:number|null,reason:string,note:string}>, chat:Array<{seat:number,text:string}>, degraded:boolean, reason?:string}>}
+ */
+export async function wolfPackAction({ session, actorSeats = [], player = null }) {
+    const legal = wolfTargets(session).map(s => s.seat);
+    const nameOf = seatNo => seatAt(session, seatNo)?.name || '';
+    // 降级（没 key / 连续失败 / 超预算）：不发请求，但照样给每只狼一个刀口，别让这一夜空着
+    const template = () => ({
+        wolves: actorSeats.map(seat => ({
+            seat, target: templateNightTarget(session, 'wolf', seat), reason: '', note: ''
+        })),
+        chat: [], degraded: true
+    });
+    if (!actorSeats.length || !legal.length) return { ...template(), reason: 'no-actor' };
+    if (modeOf(session) === 'template') return { ...template(), reason: 'template' };
+
+    const blocks = actorSeats.map(seatNo => [
+        `### ${seatNo} 号 ${nameOf(seatNo)}`,
+        viewBlock(session, seatNo),
+        `（以上只有 ${seatNo} 号自己知道，别替别的成员用上）`
+    ].join('\n'));
+    const playerBlock = player ? [
+        `### ${player.seat} 号 ${nameOf(player.seat)}（玩家本人操作，不用你扮演）`,
+        player.note ? `他在狼队频道说：「${player.note}」` : '他在狼队频道没说话',
+        player.target != null ? `他提的刀口：${player.target} 号 ${nameOf(player.target)}` : '他还没定刀口'
+    ].join('\n') : '';
+
+    const systemPrompt = [
+        roleHead(session),
+        '',
+        '这一夜你同时扮演狼队的每一位成员，各自独立判断；下面每个块只包含那一位自己知道的事，'
+            + '块与块之间不要串信息，也别替别的成员用它不该知道的线索。'
+    ].join('\n');
+    const userContent = [
+        '【狼队夜间行动】',
+        blocks.join('\n\n'),
+        playerBlock,
+        `可以刀的座位：${legal.join('、')} 号（狼同伴不在其中）。`,
+        `请为 ${actorSeats.map(s => `${s} 号`).join('、')} 各报一个自己的刀口（各自独立判断，不必互相迁就）。`,
+        '输出 JSON，不要任何别的文字：',
+        '{"chat":[{"seat":座位号,"text":"他在狼队频道说的话"}],'
+            + '"wolves":[{"seat":座位号,"target":座位号(数字),"reason":"一句话理由","note":"他自己私下记的一句话"}]}',
+        '（每个被扮演的座位在 wolves 里各有一条；note 不会给别人看，可省略）'
+    ].filter(Boolean).join('\n');
+
+    try {
+        const raw = await callAI({
+            systemPrompt, userContent,
+            maxTokens: 4000,   // 每只狼一整块视角 + 各自的输出，比默认多给
+            temperature: 0.9,
+            label: '狼人杀 · 一次狼队夜间'
+        });
+        return { ...parseWolfPackReply(raw, actorSeats, legal), degraded: false };
+    } catch (e) {
+        return { ...template(), reason: e.message || String(e) };
+    }
+}
+
+/**
+ * 狼队批量回复解析：**按座位分条**，缺的那只算弃权（不整体降级——别人说好的刀口不该被它拖着）。
+ * seat 必须是本次被扮演的那些座位之一（防模型串座位），target 只认合法刀口。
+ */
+export function parseWolfPackReply(raw, actorSeats = [], legal = []) {
+    const found = new Map();
+    const chat = [];
+    const text = String(raw || '');
+
+    const apply = obj => {
+        for (const item of (Array.isArray(obj?.wolves) ? obj.wolves : [])) {
+            const seat = Number(item?.seat);
+            if (!actorSeats.includes(seat) || found.has(seat)) continue;
+            const target = Number(item?.target);
+            found.set(seat, {
+                seat,
+                target: legal.includes(target) ? target : null,
+                reason: String(item?.reason || '').trim(),
+                note: String(item?.note || '').trim()
+            });
+        }
+        for (const item of (Array.isArray(obj?.chat) ? obj.chat : [])) {
+            const seat = Number(item?.seat);
+            const body = String(item?.text || '').trim();
+            if (!actorSeats.includes(seat) || !body) continue;
+            chat.push({ seat, text: body });
+        }
+    };
+
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { }
+    if (!parsed) {
+        try { const m = text.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); } catch { }
+    }
+    if (parsed) apply(parsed);
+
+    return {
+        wolves: actorSeats.map(seat => found.get(seat) || { seat, target: null, reason: '', note: '' }),
+        chat
+    };
+}
+
+/**
+ * 一次调用 = 一个夜晚决策（只服务 seer / guard / hunter；狼队走 wolfPackAction）
+ * @param {object} p
+ * @param {'wolf'|'seer'|'guard'|'hunter'} p.kind
+ * @param {number} [p.seatNo] 视角座位；不给就按 kind 推断
+ * @returns {Promise<{target:number|null, reason:string, note:string, degraded:boolean}>}
  */
 export async function nightAction({ session, kind, seatNo = null }) {
     const who = seatNo ?? defaultActor(session, kind);
     const targets = nightTargets(session, kind, who);
-    const fallback = { target: templateNightTarget(session, kind, who), reason: '', degraded: true };
+    const fallback = { target: templateNightTarget(session, kind, who), reason: '', note: '', degraded: true };
     if (!targets.length || modeOf(session) === 'template') return { ...fallback, reason: 'template' };
     const seat = seatAt(session, who);
     if (!seat) return { ...fallback, reason: 'no-actor' };
 
-    const systemPrompt = [ROLE_HEAD, '', viewBlock(session, who)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, who)].join('\n');
     const userContent = [
         `${NIGHT_ASK[kind] || '你要行动了。'}`,
         kind === 'wolf' ? `可以刀的座位：${targets.join('、')} 号（狼同伴不在其中）。` : '',
         kind === 'seer' ? `可以验的座位：${targets.join('、')} 号。` : '',
+        kind === 'guard' ? `可以守护的座位：${targets.join('、')} 号。` : '',
         kind === 'hunter' ? `可以带走的座位：${targets.join('、')} 号。` : '',
-        kind === 'hunter' ? '输出 JSON：{"target":座位号(数字，弃枪写 null),"reason":"一句话理由"}' : '输出 JSON：{"target":座位号(数字),"reason":"一句话理由"}',
+        kind === 'hunter'
+            ? '输出 JSON：{"target":座位号(数字，弃枪写 null),"reason":"一句话理由","note":"你自己私下记的一句话"}'
+            : '输出 JSON：{"target":座位号(数字),"reason":"一句话理由","note":"你自己私下记的一句话"}',
         '只输出 JSON，不要任何别的文字。'
     ].filter(Boolean).join('\n');
 
@@ -573,6 +727,7 @@ export async function nightAction({ session, kind, seatNo = null }) {
 export function defaultActor(session, kind) {
     if (kind === 'hunter') return session?.pendingShot?.seat ?? null;
     if (kind === 'seer') return (seatsOfRole(session, 'seer').find(s => s.alive !== false) || {}).seat ?? null;
+    if (kind === 'guard') return (seatsOfRole(session, 'guard').find(s => s.alive !== false) || {}).seat ?? null;
     return (wolvesOf(session).find(s => s.alive !== false) || {}).seat ?? null;
 }
 
@@ -580,6 +735,8 @@ export function defaultActor(session, kind) {
 export function nightTargets(session, kind, seatNo) {
     if (kind === 'wolf') return wolfTargets(session).map(s => s.seat);
     if (kind === 'seer') return seerTargets(session, seatNo).map(s => s.seat);
+    // 守卫走引擎的 guardTargets：可自守，且已经排掉上一夜守过的那位（下面那条通用尾巴会把「自己」排掉）
+    if (kind === 'guard') return guardTargets(session, seatNo).map(s => s.seat);
     return aliveSeats(session).filter(s => s.seat !== seatNo).map(s => s.seat);
 }
 
@@ -587,13 +744,18 @@ export function nightTargets(session, kind, seatNo) {
 export function parseNightReply(raw, legal = [], kind = 'wolf') {
     const text = String(raw || '');
     const take = v => { const n = Number(v); return legal.includes(n) ? n : null; };
-    try { const obj = JSON.parse(text); if (obj && typeof obj === 'object') return { target: take(obj.target), reason: String(obj.reason || '').trim() }; } catch { }
+    const pick = obj => ({
+        target: take(obj.target),
+        reason: String(obj.reason || '').trim(),
+        note: String(obj.note || '').trim()
+    });
+    try { const obj = JSON.parse(text); if (obj && typeof obj === 'object') return pick(obj); } catch { }
     try {
         const m = text.match(/\{[\s\S]*\}/);
-        if (m) { const obj = JSON.parse(m[0]); if (obj && typeof obj === 'object') return { target: take(obj.target), reason: String(obj.reason || '').trim() }; }
+        if (m) { const obj = JSON.parse(m[0]); if (obj && typeof obj === 'object') return pick(obj); }
     } catch { }
     const said = text.match(/(\d{1,2})\s*号/);
-    return { target: said ? take(said[1]) : null, reason: stripQuotes(text.split('\n')[0] || '') };
+    return { target: said ? take(said[1]) : null, reason: stripQuotes(text.split('\n')[0] || ''), note: '' };
 }
 
 /** 模板模式的夜晚行动：狼刀座号最小的好人，预言家验第一个没验过的，猎人弃枪 */
@@ -617,17 +779,20 @@ export function templateNightTarget(session, kind, seatNo) {
  */
 export async function ghostwrite({ session, seatNo, draft = '', marks = {}, type }) {
     const limit = type?.speechLimit || 120;
-    const mine = { text: String(draft || '').trim(), degraded: true };
+    const mine = { text: String(draft || '').trim(), note: '', degraded: true };
     if (modeOf(session) === 'template') return mine;
 
     const marked = Object.entries(marks).map(([s, t]) => `${s} 号=${t}`).join('、');
-    const systemPrompt = [ROLE_HEAD, '', viewBlock(session, seatNo)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo)].join('\n');
     const userContent = [
         `轮到你发言，你自己先打了半句草稿，想让别人（同样是你）替你把话说完。`,
         mine.text ? `你的草稿：${mine.text}` : '你还没打草稿，只给了自己的判断。',
         marked ? `你自己给场上的人贴的判断（顺着它说）：${marked}` : '',
         `请以你的口吻写成一段完整的发言（不超过 ${limit} 字），保留草稿的原意，可以补上理由与态度。`,
-        '只写你说出口的话，不要写「XX 说：」，不要提到草稿、标签、AI。'
+        '只写你说出口的话，不要写「XX 说：」，不要提到草稿、标签、AI。',
+        '',
+        '最后另起一行，可选地写一句你私下记的笔记（不公开，给以后的自己看；没有就不写），格式必须完全一致：',
+        '【笔记】……'
     ].filter(Boolean).join('\n');
 
     try {
@@ -636,9 +801,10 @@ export async function ghostwrite({ session, seatNo, draft = '', marks = {}, type
             temperature: 0.9,
             label: '狼人杀 · 代笔'
         });
-        const text = stripQuotes(String(raw || '').trim());
-        if (!text) throw new Error('空回复');
-        return { text, degraded: false };
+        // 笔记先剥掉再判空：模型只回一行笔记不算有正文，但那行笔记也不能被当成正文
+        const parsed = parseSpeakReply(raw);
+        if (!parsed.text) throw new Error('空回复');
+        return { text: parsed.text, note: parsed.note, degraded: false };
     } catch (e) {
         // 失败就把玩家自己打的字原样还给他，绝不吞掉
         return { ...mine, reason: e.message || String(e) };

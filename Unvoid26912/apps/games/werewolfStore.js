@@ -1,8 +1,10 @@
 // apps/games/werewolfStore.js — 狼人杀独立 IndexedDB 存储
 // DB: werewolfDB v2
 //   sessions（keyPath id）+ 索引 status / participantIds(multiEntry)：一桌一局的完整记录（含 forming 准备态）
-//   stats（keyPath characterId）：按角色累计的战绩
-//   npcs（keyPath npcId）：临时路人池（不在名册里，只在本库）
+//   stats（**out-of-line key = characterId**）：真实角色的角色档案 = 战绩 + 档位 + 点亮
+//     （名册里的、网络里的都算「真实角色」——能不能上桌和坐不坐主视角是两回事：
+//      参与只要求它是个角色，主视角才必须是名册角色；所以这里按 characterId 存，不查名册）
+//   npcs（keyPath npcId）：临时路人池（凑人数现造的，只在本库）；路人档案**与 stats 同形**
 //   rooms（keyPath typeId）：房间分类配置 + 该类累计开桌数（本期由代码常量种子写入）
 //
 // 约定：
@@ -11,6 +13,11 @@
 // - 一类房间下可以同时存在多张桌：sessions 里同 typeId 的多条记录，各占一个 tableNo。
 // - session 是自由结构（phase/votes/revealMode 明牌暗牌等字段由引擎与界面往上挂）：
 //   新加字段只要不建索引就不用升 DB_VERSION，老记录缺字段时由读侧兜底。
+// - **档案（stats / npcs）不加新 store、不升版本**：档位与点亮是往既有记录上挂的扩展字段，
+//   `{ ...blank(), ...current }` 保得住未知字段，老记录照旧读得出。升 DB_VERSION 会顺手
+//   重建 rooms（onupgradeneeded 里那次 deleteObjectStore 没有版本守卫），桌号会从头再来。
+// - 战绩的累加只有一份（本文件的 accumulate），真实角色与临时路人两条档案线共用；
+//   手册/界面只**读**这里写好的字段，本文件不 import apps/ 里任何模块（依赖只向下）。
 
 const DB_NAME = 'werewolfDB';
 const DB_VERSION = 2;
@@ -153,12 +160,17 @@ export async function getBusyCharacterIds() {
 }
 
 /* ================================================================ */
-/*  stats（按角色累计）                                                */
+/*  档案底座（stats 与 npcs 共用同一个形状）                            */
 /* ================================================================ */
 
-function emptyStat(characterId) {
+/**
+ * 一份角色档案：战绩 + 档位 + 点亮。真实角色（名册/网络）与临时路人**共用这一套字段**，
+ * 所以累加与点亮都只有一份逻辑，两条线不会漂。
+ * 后半段（level/flair/why/at/unlocked）全部**可缺**——「谁先来谁先建档案」：
+ * 先测评就先有档位，先打完就先有战绩，另一块留着是空的。
+ */
+function blank() {
     return {
-        characterId,
         played: 0,
         win: 0,
         lose: 0,
@@ -167,8 +179,79 @@ function emptyStat(characterId) {
         streak: 0,         // 当前连胜
         survival: 0,       // 活到最后的局数
         lastPlayedAt: 0,
+        level: null,       // 落座测评：水平档（werewolfCodex.TIERS 的 key）
+        flair: null,       // 落座测评：悟性档（FLAIR_TIERS 的 key）
+        why: '',           // 那一句依据（没依据不算数，见 werewolfCodex）
+        at: 0,             // 测评时间
+        unlocked: [],      // 结算时按条件授予的条目 id（werewolfCodex.earnedIds）
         version: 1         // 扩展位：以后加字段只加不改结构
     };
+}
+
+function emptyStat(characterId) {
+    return { characterId, ...blank() };
+}
+
+/** 新的路人记录（名字 + 人设 + 同一套档案字段） */
+export function emptyNpc({ npcId, name = '', persona = '', typeId = '' }) {
+    return { ...blank(), npcId, name, persona, typeId, createdAt: Date.now() };
+}
+
+/* ---------------- 战绩累加（本层私有：档案怎么长，由记录的主人说了算） ----------------
+ * 名册角色（applyGameResult）与路人（recordNpcGame）共用这一段，两条档案线不会各算各的。
+ * 依赖方向：store 不 import apps/ 里任何东西——手册/界面读的是这里写好的字段，
+ * 反过来 store 一个字都不关心「什么叫点亮」。纯函数，不改入参；时间戳由落库处打。
+ */
+
+function bump(map, key, win) {
+    const out = { ...(map || {}) };
+    if (key) {
+        const cell = out[key] || { played: 0, win: 0 };
+        out[key] = { played: (Number(cell.played) || 0) + 1, win: (Number(cell.win) || 0) + (win ? 1 : 0) };
+    }
+    return out;
+}
+
+/**
+ * 一局打完，往记录上累一笔（缺字段、空记录都不炸）。
+ * @param {object} record 上一份记录
+ * @param {{role?:string, win?:boolean, survived?:boolean, typeId?:string}} detail
+ */
+export function accumulate(record, detail = {}) {
+    const base = record || {};
+    const win = !!detail.win;
+    return {
+        ...base,
+        played: (Number(base.played) || 0) + 1,
+        win: (Number(base.win) || 0) + (win ? 1 : 0),
+        lose: (Number(base.lose) || 0) + (win ? 0 : 1),
+        streak: win ? (Number(base.streak) || 0) + 1 : 0,
+        survival: (Number(base.survival) || 0) + (detail.survived ? 1 : 0),
+        byRole: bump(base.byRole, detail.role, win),
+        byType: bump(base.byType, detail.typeId, win)
+    };
+}
+
+/** 已授予的 ∪ 这次算出的（去重保序） */
+function mergeIds(oldIds, ids) {
+    const out = [...(oldIds || [])];
+    const have = new Set(out);
+    for (const id of ids || []) if (id && !have.has(id)) { have.add(id); out.push(id); }
+    return out;
+}
+
+/**
+ * 点亮 = 往档案上并上一批条目 id（幂等；stats 与 npcs 共用这一段读写）。
+ * 记录还不存在就先建一条——「谁先来谁先建档案」。
+ * @param {boolean} outOfLine stats 是 out-of-line key（put 要带键），npcs 是 keyPath（不能带）
+ */
+async function lightIds(storeName, key, ids, makeBlank, outOfLine = true) {
+    if (!key || !ids?.length) return false;
+    const current = (await readStore(storeName, s => s.get(key), null)) || makeBlank();
+    const merged = mergeIds(current.unlocked, ids);
+    if (merged.length === (current.unlocked || []).length) return true;   // 没有新点亮的，不写这一次
+    const next = { ...makeBlank(), ...current, unlocked: merged };
+    return writeStore(storeName, s => (outOfLine ? s.put(next, key) : s.put(next)));
 }
 
 export async function getStat(characterId) {
@@ -197,33 +280,45 @@ export async function listStats() {
 }
 
 /**
- * 一局结束后累加某个角色的战绩
+ * 一局结束后累加某个真实角色的战绩（名册里的、网络里的都走这一条）。
+ * 累加走本文件的 accumulate（与路人那一条线共用），这里只负责读改写与落库。
  * @param {string} characterId
  * @param {{ role: string, win: boolean, survived: boolean, typeId: string }} detail
+ * @returns {Promise<object|null>} 写成功返回**新的档案**（调用方接着算该点亮哪些），失败 null
  */
 export async function applyGameResult(characterId, detail) {
-    if (!characterId || !detail) return false;
+    if (!characterId || !detail) return null;
     const current = (await getStat(characterId)) || emptyStat(characterId);
-    const stat = { ...emptyStat(characterId), ...current };
-    stat.byRole = { ...(current.byRole || {}) };
-    stat.byType = { ...(current.byType || {}) };
-
-    const win = !!detail.win;
-    stat.played += 1;
-    if (win) { stat.win += 1; stat.streak = (current.streak || 0) + 1; }
-    else { stat.lose += 1; stat.streak = 0; }
-    if (detail.survived) stat.survival = (current.survival || 0) + 1;
-
-    if (detail.role) {
-        const cell = stat.byRole[detail.role] || { played: 0, win: 0 };
-        stat.byRole[detail.role] = { played: cell.played + 1, win: cell.win + (win ? 1 : 0) };
-    }
-    if (detail.typeId) {
-        const cell = stat.byType[detail.typeId] || { played: 0, win: 0 };
-        stat.byType[detail.typeId] = { played: cell.played + 1, win: cell.win + (win ? 1 : 0) };
-    }
-
+    const stat = { ...emptyStat(characterId), ...accumulate(current, detail) };
     stat.lastPlayedAt = Date.now();
+    return (await writeStore(STORE_STATS, s => s.put(stat, characterId))) ? stat : null;
+}
+
+/**
+ * 把这次算出来该点亮的条目授予某个角色（并集去重，幂等）。
+ * 读侧一律用「授予 ∪ 现在算得出」，所以这里少写一笔也不会让手册缺一条——
+ * 它的作用是**记住**：条件将来改严了，也不该把已经点亮的灭掉。
+ * @returns {Promise<boolean>} 没有新增时也算成功（不写库）
+ */
+export async function lightEntries(characterId, ids) {
+    return lightIds(STORE_STATS, characterId, ids, () => emptyStat(characterId));
+}
+
+/**
+ * 落座测评的那一笔：水平 / 悟性 / 依据 / 时间。缺一项都不写（没依据不算数）。
+ * **第一次估的算数**：已经有档位的不再覆盖——点数只在落座那一刻生成一次，
+ * 又邀请一次不等于重估一次（本轮没有重测入口，用户 2026-09-12 定）。
+ * 问不问是 AI 层的事（有档位就不问），这里是**真正管用的那道**：万一还是送到了，也不覆盖。
+ * @returns {Promise<boolean>} 写进去、或本来就有档位无须写，都算成功
+ */
+export async function upsertCodex(characterId, codex) {
+    if (!characterId || !codex?.level) return false;
+    const current = await getStat(characterId);
+    if (current?.level) return true;
+    const stat = {
+        ...emptyStat(characterId), ...(current || {}),
+        level: codex.level, flair: codex.flair || null, why: codex.why || '', at: Date.now()
+    };
     return writeStore(STORE_STATS, s => s.put(stat, characterId));
 }
 
@@ -250,13 +345,23 @@ export async function listNpcs() {
     return (await readStore(STORE_NPCS, s => s.getAll(), [])) || [];
 }
 
-/** 路人打完一局：累计局数与胜场（不进角色战绩） */
-export async function recordNpcGame(npcId, win) {
+/**
+ * 路人打完一局：往他**自己那一份**档案上累一笔（与名册角色同一套字段、同一段累加逻辑）。
+ * 路人不上名册，所以数据只在本库里；记全是为了以后能复用同一个路人，而不是每次重造。
+ * @param {{ role: string, win: boolean, survived: boolean, typeId: string }} detail
+ * @returns {Promise<object|null>} 写成功返回新的档案（调用方接着算该点亮哪些），失败 null
+ */
+export async function recordNpcGame(npcId, detail) {
+    if (!npcId || !detail) return null;
     const npc = await getNpc(npcId);
-    if (!npc) return false;
-    npc.games = (npc.games || 0) + 1;
-    npc.wins = (npc.wins || 0) + (win ? 1 : 0);
-    return saveNpc(npc);
+    if (!npc) return null;
+    const next = { ...npc, ...accumulate(npc, detail), lastPlayedAt: Date.now(), lastSeenAt: Date.now() };
+    return (await writeStore(STORE_NPCS, s => s.put(next))) ? next : null;
+}
+
+/** 路人该点亮哪些（与名册角色同一套条件判定） */
+export async function lightNpcEntries(npcId, ids) {
+    return lightIds(STORE_NPCS, npcId, ids, () => emptyNpc({ npcId }), false);
 }
 
 /* ================================================================ */

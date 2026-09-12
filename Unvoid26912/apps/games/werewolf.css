@@ -474,6 +474,83 @@
     line-height: 1.7;
 }
 
+/* ---------------- 角色档案卡（「我的」页） ---------------- */
+
+.ww-codex-card { display: block; padding: 13px; }
+
+.ww-codex-head { display: flex; align-items: center; gap: 10px; }
+.ww-codex-head .ww-avatar,
+.ww-codex-head .ww-avatar-fallback { width: 46px; height: 46px; font-size: 19px; }
+
+.ww-codex-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.ww-codex-name strong { font-size: 15px; }
+.ww-codex-tiers { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.ww-codex-why {
+    margin: 10px 0 0;
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: var(--muted);
+}
+
+/* 档位徽章：水平按档上色，悟性留白框（两枚并排时不抢眼） */
+.ww-tier-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    background: #f1dfd0;
+    color: #96583c;
+}
+
+.ww-tier-badge.is-none { background: rgba(233, 223, 209, .9); color: var(--muted); font-weight: 400; }
+.ww-tier-badge.tier-beginner { background: #e7e2da; color: #7d7367; }
+.ww-tier-badge.tier-rookie { background: #e2e8dc; color: #5d7a4e; }
+.ww-tier-badge.tier-normal { background: #dde6ec; color: #4b6b83; }
+.ww-tier-badge.tier-veteran { background: #ece1d2; color: #9a6a33; }
+.ww-tier-badge.tier-expert { background: #efdcd6; color: #a2483a; }
+
+.ww-tier-badge.flair-dull,
+.ww-tier-badge.flair-steady,
+.ww-tier-badge.flair-quick,
+.ww-tier-badge.flair-sharp {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--muted);
+}
+
+/* ---------------- 手册条目 ---------------- */
+
+.ww-entry {
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    border-radius: 15px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+}
+
+.ww-entry-head { display: flex; align-items: center; gap: 8px; }
+.ww-entry-head strong { flex: 1; font-size: 12.5px; }
+
+.ww-entry-tier {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    background: rgba(233, 223, 209, .9);
+    color: var(--muted);
+}
+
+.ww-entry p { margin: 6px 0 0; font-size: 11.5px; line-height: 1.72; color: #4a443e; }
+
+/* 没点亮的：标题留着、正文换成点亮条件，整卡压暗一档（照 .ww-card.is-quiet 的观感） */
+.ww-entry.is-locked { background: rgba(255, 255, 255, .42); box-shadow: none; }
+.ww-entry.is-locked .ww-entry-head strong { color: var(--muted); }
+.ww-entry.is-locked p { color: var(--muted); font-size: 11px; }
+
 /* ---------------- 弹窗 ---------------- */
 
 .ww-modal-mask {

@@ -13,6 +13,8 @@ import { CharacterStore } from '../../store/CharacterStore.js';
 import { getVisibleProfile } from '../../store/profileAccess.js';
 import { getCharacterRecordById, getCharacterNameById } from '../characterManager.js';
 import { MARK_TAGS, getBoard, boardProse } from './werewolfRooms.js';
+import { getStat, getNpc } from './werewolfStore.js';
+import { codexBlock, parseTier, parseFlair, TIERS, FLAIR_TIERS } from './werewolfCodex.js';
 import {
     seatAt, aliveSeats, wolvesOf, seatsOfRole, wolfTargets, seerTargets, guardTargets,
     viewOf, publicFeed
@@ -125,6 +127,73 @@ function seatLines(seated = [], freeSeats = []) {
     ].join('\n');
 }
 
+/**
+ * 这个座位的狼人杀档案（战绩 + 档位 + 点亮）：真实角色读 stats，临时路人读 npcs。
+ * viewBlock 是同步的，所以读书这一步必须在调用点做完再传进去。
+ * 读不到（没打过、没测评过）就返回 null——**别给没上过桌的人凭空发知识**。
+ */
+export async function loadCodex(seat) {
+    if (!seat) return null;
+    try {
+        if (seat.kind === 'npc') return seat.npcId ? await getNpc(seat.npcId) : null;
+        return seat.characterId ? await getStat(seat.characterId) : null;
+    } catch (e) {
+        return null;   // 读档失败不该让这一局打不下去
+    }
+}
+
+/** 按座位批量取（狼队一次调用要装好几只狼，别一个一个 await） */
+async function loadCodexMap(session, seatNos = []) {
+    const pairs = await Promise.all(seatNos.map(async n => [n, await loadCodex(seatAt(session, n))]));
+    return Object.fromEntries(pairs);
+}
+
+/* ---------------- 落座测评（角色「狼人杀点数」） ----------------
+ * 口径（用户 2026-09-12 定）：点数**只在落座那一刻**生成一次，两栏 = 水平 + 悟性，另附一句依据。
+ * 搭在邀请/匹配那次调用上顺带要（不加请求次数），**而且要按需**：
+ * 邀请之前先看他有没有档位，没有才把这三行加进提示词（用户 2026-09-13 定）——
+ * 又邀请一次不等于重估一次，本轮也没有重测入口。因为多问一次不写、少问一次下次再问，
+ * 所以不需要「事后补打」那一路：漏答的（模型没给、或当时没配 key）下次被邀请时自然会再问一次。
+ */
+
+const labelList = list => list.map(t => t.label).join(' / ');
+
+/**
+ * 这个人有没有测评档位。跟 loadCodex 一样，读档失败一律按「没有」处理——
+ * 顶多多问一次，而写入处还挡了一道（upsertCodex 不覆盖已有档位），不会把档位估跑偏。
+ */
+async function hasLevel(characterId) {
+    if (!characterId) return false;
+    try {
+        return !!(await getStat(characterId))?.level;
+    } catch (e) {
+        return false;
+    }
+}
+
+/** 没有档位时才追加的三行标记（邀请与匹配共用同一套格式、同一个解析） */
+const CODEX_ASK = [
+    '另外，再以狼人杀老手的眼光，估一下**这个人**打狼人杀的水平（按他的性格、阅历、脑子快不快估，不必客气），另起三行给出标记：',
+    `【水平】 从「${labelList(TIERS)}」里挑一个`,
+    `【悟性】 从「${labelList(FLAIR_TIERS)}」里挑一个：他学新东西、看穿套路的快慢`,
+    '【依据】 一句话说明理由（说不出理由就别写这三行）'
+];
+
+/**
+ * 从回复里读那三行标记。**没依据不算数**、**认不出不算数**：
+ * 宁可这个角色暂时没有档位（界面上显示「未测评」），也不给他落一个默认档——
+ * 第一个不按格式回答的模型会把角色永久钉死在错误的水平上。
+ * @returns {{level:string, flair:string|null, why:string}|null}
+ */
+export function readCodexMarkers(raw) {
+    const text = String(raw || '');
+    const pick = re => ((text.match(re) || [])[1] || '').trim();
+    const level = parseTier(pick(/【水平】\s*([^\n]*)/));
+    const flair = parseFlair(pick(/【悟性】\s*([^\n]*)/));
+    const why = pick(/【依据】\s*([^\n]*)/);
+    return level && why ? { level, flair, why } : null;
+}
+
 /* ---------------- 邀请（一次调用 = 一位被邀请者） ---------------- */
 
 /**
@@ -159,6 +228,7 @@ export async function inviteCharacter({ type, board, inviterId, inviterName, tar
         others.push(o);
     }
     const knowledge = buildKnowledge(target.id, others);
+    const needCodex = !(await hasLevel(target.id));   // 有档位就不再问（他那一份就在档案里）
 
     const systemPrompt = [
         '你在扮演一个角色。请完全以这个角色的人设说话，用第一人称，不要跳出角色，'
@@ -178,11 +248,12 @@ export async function inviteCharacter({ type, board, inviterId, inviterName, tar
         `板子：${board?.label || '6 人标准板'}`,
         seatLines(seated, freeSeats),
         '',
-        '请写一段自然的回应（1~2 句，符合你的性格与说话风格），然后在最后另起三行给出标记，格式必须完全一致：',
+        '请写一段自然的回应（1~2 句，符合你的性格与说话风格），然后在最后另起几行给出标记，格式必须完全一致：',
         '【同意】 或 【拒绝】',
         '【座位】 一个还空着的座位号（同意时才写）',
         '【进场】 你进场后的一句话（打招呼、对熟人说点什么；不想说话就写：沉默）',
-        '只输出回应正文与这三行标记，不要解释游戏规则。'
+        ...(needCodex ? CODEX_ASK : []),
+        '只输出回应正文与这些标记行，不要解释游戏规则。'
     ].join('\n');
 
     try {
@@ -215,9 +286,11 @@ export function parseInviteReply(raw) {
     const seatMatch = text.match(/【座位】[^\d\n]*(\d+)/);
     const reactMatch = text.match(/【进场】\s*([^\n]*)/);
 
-    // 展示用的正文：剔掉标记行（照 chat.js 剔标记的先例）
+    // 展示用的正文：剔掉标记行（照 chat.js 剔标记的先例）。
+    // 【水平】【悟性】【依据】也必须在这里剥掉——它们要被写进真实聊天记录，
+    // 漏一个就会原样出现在「来打狼人杀吗」那段对话里。
     const reply = text
-        .replace(/【(同意|拒绝|座位|进场)】[^\n]*/g, '')
+        .replace(/【(同意|拒绝|座位|进场|水平|悟性|依据)】[^\n]*/g, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 
@@ -225,7 +298,8 @@ export function parseInviteReply(raw) {
         agreed,
         seat: seatMatch ? Number(seatMatch[1]) : null,
         reaction: stripQuotes(reactMatch?.[1]),
-        reply: stripQuotes(reply)
+        reply: stripQuotes(reply),
+        codex: readCodexMarkers(text)
     };
 }
 
@@ -244,6 +318,13 @@ export function parseInviteReply(raw) {
 export async function matchCharacters({ type, board, seated = [], freeSeats = [], candidates = [] }) {
     if (!candidates.length) return { list: [], degraded: false };
 
+    // 谁还没有档位（与邀请同一条口径：有档位就不再问，免得把估好的东西重新估一遍）。
+    // 批量调用里没法一个人一个人地问，于是**点名**：只在 JSON 里给这几个人加测评字段。
+    const assessNos = [];
+    for (let i = 0; i < candidates.length; i++) {
+        if (!(await hasLevel(candidates[i].id))) assessNos.push(i + 1);
+    }
+
     const seatedOthers = seated.filter(s => s.characterId).map(s => ({ id: s.characterId, name: s.name }));
     const blocks = candidates.map((c, i) => {
         const knowledge = buildKnowledge(c.id, seatedOthers.filter(o => o.id !== c.id));
@@ -260,7 +341,14 @@ export async function matchCharacters({ type, board, seated = [], freeSeats = []
         + '每个角色只能基于【他自己的人设与他对场上这些人的了解】来行动，不要替别人说话，也不要编造他没有的认知。'
         + '性格外向的可能主动打招呼、对熟人说话，性格冷淡的可能只写「沉默」。'
         + '输出 JSON 数组，每个元素对应一个角色：'
-        + '{"characterId":"角色id","seat":座位号(数字),"reaction":"进场后的一句话，不想说话就写 沉默"}。'
+        + '{"characterId":"角色id","seat":座位号(数字),"reaction":"进场后的一句话，不想说话就写 沉默"'
+        + (assessNos.length
+            ? `,"level":"${TIERS.map(t => t.label).join('/')} 里挑一个，按这个人打狼人杀的水平估",`
+                + `"flair":"${FLAIR_TIERS.map(t => t.label).join('/')} 里挑一个",`
+                + '"why":"一句话说明你这么估的理由（说不出理由就留空这些字段）"}。'
+                + `其中只有 ${assessNos.map(n => `角色 ${n}`).join('、')} 还没有测评数据，`
+                + '请只给这几位写 level/flair/why，其余角色这三个字段一律留空。'
+            : '}。')
         + '只输出 JSON 数组，不要任何其他文字。';
 
     const userContent = blocks.join('\n\n---\n\n')
@@ -288,10 +376,14 @@ export function parseMatchReply(raw) {
         for (const item of arr) {
             if (!item?.characterId) continue;
             const seat = Number(item.seat);
+            // 档位与依据缺一不可（与邀请那条路径同一个口径）
+            const level = parseTier(item.level || '');
+            const why = String(item.why || '').trim();
             out.push({
                 characterId: String(item.characterId),
                 seat: Number.isFinite(seat) && seat > 0 ? seat : null,
-                reaction: String(item.reaction || '').trim()
+                reaction: String(item.reaction || '').trim(),
+                codex: level && why ? { level, flair: parseFlair(item.flair || ''), why } : null
             });
         }
     };
@@ -369,14 +461,45 @@ function noteHead(note) {
     return `第 ${note.round || 1} ${day}·${NOTE_KIND_LABEL[note.kind] || '判断'}`;
 }
 
+/* ---- 白天的发言秩序 ----
+ * 秩序不是策略：这一轮每人只说一次、按座号顺序、出局的人不再开口——
+ * 这些不该由角色的「水平」决定，所有座位无条件拿到（策略知识才归手册）。
+ */
+
+/**
+ * 这一轮轮得到谁、谁已经说完了。
+ * 实测症状：靠后的发言者会说「想听 3 号再说说」——他不知道 3 号这一轮已经说完，
+ * 等不到回应；这里给他秩序事实 + 「要追问就往下轮压」这个唯一可行的说法。
+ * 只读公开信息（spokeThisRound + 存活名单），别人的私有数据一个字都不进来。
+ */
+function speakOrderBlock(session, seatNo) {
+    if (session?.phase !== 'day_speak') return '';
+    const spoke = new Set(session.spokeThisRound || []);
+    const alive = aliveSeats(session);
+    const done = alive.filter(s => spoke.has(s.seat));
+    const after = alive.filter(s => !spoke.has(s.seat) && s.seat !== seatNo);
+    const names = list => list.map(s => `${s.seat} 号 ${s.name}`).join('、');
+
+    return [
+        '【这一轮的发言秩序】天亮后按座号顺序依次发言，每人这一轮只说一次；出局的人不再发言、不再投票。',
+        done.length
+            ? `已经说过的：${names(done)}——他们这一轮不会再开口，你追着问也等不到回应；要压谁就直说，或者说明「下一轮要他讲清楚」。`
+            : '你是这一轮第一个说的：前面还没人开口，不会有人当场接你的话，要等下一轮。',
+        after.length
+            ? `还没轮到（在你之后）：${names(after)}。`
+            : '你是这一轮最后一个说的：你之后直接进投票，本轮不会再有发言了。'
+    ].join('\n');
+}
+
 /* ---- 视角块 ---- */
 
 /**
  * 这个座位此刻知道的事：自己（身份/阵营/同伴/验人记录）+ 公开场上信息 +
- * 自己对在场者的私人认知 + **它自己**此前贴的判断。
+ * 自己对在场者的私人认知 + **它自己**此前贴的判断 + 它自己的狼人杀档案。
  * 公开那一段各座位逐字一致（都是 publicFeed 出来的）。
+ * @param {object} [record] 这个座位**自己**的档案（由调用点先 await loadCodex 取好，见那里的说明）
  */
-function viewBlock(session, seatNo) {
+function viewBlock(session, seatNo, record = null) {
     const seat = seatAt(session, seatNo);
     if (!seat) return '';
     const view = viewOf(session, seatNo) || {};
@@ -392,6 +515,9 @@ function viewBlock(session, seatNo) {
     const labelLine = Object.entries(myLabels).map(([s, t]) => `${s} 号=${t}`).join('、');
     // 笔记只读**它自己**那一份：狼队批量调用时，每只狼的块里只有它自己写过的东西
     const myNotes = (session.aiNotes || {})[seatNo] || [];
+    // 手册：只装**它自己**点亮的条目（路人固定拿通用基础那一档，见 werewolfCodex）
+    const codexText = codexBlock(record, { isGuest: seat.kind === 'npc', roomScope: session.typeId });
+    const order = speakOrderBlock(session, seatNo);
 
     return [
         '【你】',
@@ -411,7 +537,9 @@ function viewBlock(session, seatNo) {
         labelLine ? `\n【你之前对他们的判断】\n${labelLine}` : '',
         myNotes.length
             ? `\n【你自己之前记的笔记】\n${myNotes.slice(-NOTES_IN_PROMPT).map(n => `- ${noteHead(n)}：${n.text}`).join('\n')}`
-            : ''
+            : '',
+        codexText ? `\n${codexText}` : '',   // 手册是「他一贯懂的东西」，排在「此刻」的秩序之前
+        order ? `\n${order}` : ''      // 秩序放最后：它是「此刻」的事，前面那些块都是历史的
     ].filter(Boolean).join('\n');
 }
 
@@ -456,7 +584,7 @@ export async function speakCharacter({ session, seatNo, type }) {
     const fallback = { text: fallbackSpeech(seatNo), marks: {}, note: '', degraded: true };
     if (modeOf(session) === 'template') return { ...fallback, reason: 'template' };
 
-    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo, await loadCodex(seatAt(session, seatNo)))].join('\n');
     const userContent = [
         `轮到你发言了。${toneLine(type)}`,
         `请说一段自然的话（不超过 ${limit} 字）：可以表态、可以怀疑谁、可以解释自己，也可以顺着你之前的判断说。`,
@@ -524,7 +652,7 @@ export async function voteCharacter({ session, seatNo, type }) {
     const fallback = { vote: null, reason: '', note: '', marks: {}, degraded: true };
     if (!legal.length || modeOf(session) === 'template') return { ...fallback, reason: 'template' };
 
-    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo, await loadCodex(seatAt(session, seatNo)))].join('\n');
     const userContent = [
         `投票时间。${toneLine(type)}`,
         `你要投一个人出局，或者弃票。可以投的座位：${legal.join('、')} 号。`,
@@ -599,9 +727,10 @@ export async function wolfPackAction({ session, actorSeats = [], player = null }
     if (!actorSeats.length || !legal.length) return { ...template(), reason: 'no-actor' };
     if (modeOf(session) === 'template') return { ...template(), reason: 'template' };
 
+    const codexes = await loadCodexMap(session, actorSeats);
     const blocks = actorSeats.map(seatNo => [
         `### ${seatNo} 号 ${nameOf(seatNo)}`,
-        viewBlock(session, seatNo),
+        viewBlock(session, seatNo, codexes[seatNo]),
         `（以上只有 ${seatNo} 号自己知道，别替别的成员用上）`
     ].join('\n'));
     const playerBlock = player ? [
@@ -698,7 +827,7 @@ export async function nightAction({ session, kind, seatNo = null }) {
     const seat = seatAt(session, who);
     if (!seat) return { ...fallback, reason: 'no-actor' };
 
-    const systemPrompt = [roleHead(session), '', viewBlock(session, who)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, who, await loadCodex(seat))].join('\n');
     const userContent = [
         `${NIGHT_ASK[kind] || '你要行动了。'}`,
         kind === 'wolf' ? `可以刀的座位：${targets.join('、')} 号（狼同伴不在其中）。` : '',
@@ -783,7 +912,7 @@ export async function ghostwrite({ session, seatNo, draft = '', marks = {}, type
     if (modeOf(session) === 'template') return mine;
 
     const marked = Object.entries(marks).map(([s, t]) => `${s} 号=${t}`).join('、');
-    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo)].join('\n');
+    const systemPrompt = [roleHead(session), '', viewBlock(session, seatNo, await loadCodex(seatAt(session, seatNo)))].join('\n');
     const userContent = [
         `轮到你发言，你自己先打了半句草稿，想让别人（同样是你）替你把话说完。`,
         mine.text ? `你的草稿：${mine.text}` : '你还没打草稿，只给了自己的判断。',

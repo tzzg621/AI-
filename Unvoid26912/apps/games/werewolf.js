@@ -17,6 +17,7 @@ import {
 import * as store from './werewolfStore.js';
 import * as engine from './werewolfEngine.js';
 import * as ai from './werewolfAI.js';
+import * as codex from './werewolfCodex.js';
 
 export const id = 'werewolf';
 export const label = '狼人杀';
@@ -65,6 +66,8 @@ export async function start(overlay, globalState, onBack) {
         wolfPick: null,       // 狼队这一刀我挑的座号（还没提交给队友，只在内存里）
         wolfNote: '',         // 我留给队友的那句话
         inflight: new Map(),  // inviteId -> { characterId, seat, name }：还在飞的邀请
+        settling: new Set(),  // 已经认领了结算的那几局（防同一次结束被算两遍战绩）
+        meStat: null,         // 主视角自己的档案（「我的」页与手册页读它）
         closed: false
     };
 
@@ -86,6 +89,7 @@ export async function start(overlay, globalState, onBack) {
 
     await store.seedRoomTypes(ROOM_TYPES);
     await refreshTables(app);
+    await refreshMe(app);
     renderApp(app, close);
 }
 
@@ -93,6 +97,11 @@ export async function start(overlay, globalState, onBack) {
 
 function handleBack(app, close) {
     const name = app.page.name;
+    if (name === 'handbook') {
+        app.page = { name: 'me' };
+        renderApp(app, close);
+        return;
+    }
     if (name === 'type' || name === 'room' || name === 'rules' || name === 'table' || name === 'spectate') {
         leaveSubPage(app, close);
         return;
@@ -102,6 +111,12 @@ function handleBack(app, close) {
 
 async function leaveSubPage(app, close) {
     const page = app.page;
+    // 从手册里翻开的「完整规则」，退回来还是手册（别把人甩到分类页去）
+    if (page.from === 'handbook') {
+        app.page = { name: 'handbook' };
+        renderApp(app, close);
+        return;
+    }
     if (page.name === 'room' && !app.readonly) {
         // 散桌：准备态里一个人都没坐、也没有在飞邀请时，就别留着这张空桌
         const s = app.session;
@@ -136,6 +151,14 @@ function tablesOf(app, typeId) {
     return app.typeTables[typeId] || [];
 }
 
+/**
+ * 主视角自己的档案。**不开档**（他那一座是本地坐下、没有 AI 邀请可搭，用户 2026-09-12 定的口径）：
+ * 所以这里读的只有战绩与点亮，没有档位；没打过就是 null，页面照显示，只是写着「还没打过」。
+ */
+async function refreshMe(app) {
+    app.meStat = app.me ? await store.getStat(app.me) : null;
+}
+
 /** 主视角被锁在别桌时，给一句能照着做的提示 */
 function blockedByLock(app, targetTypeId) {
     const lock = app.lockedSession;
@@ -157,9 +180,51 @@ async function mutateSession(app, sessionId, mutator) {
     const fresh = await store.getSession(sessionId);
     if (!fresh || !store.ACTIVE_STATUS.includes(fresh.status)) return null;
     const out = await mutator(fresh);
-    await store.saveSession(fresh);
+
+    // 这一局是不是就在这一步结束的。结束只能在**这一次**调用里认领：
+    // 开头那道 ACTIVE_STATUS 早退会让「结束之后」的写入被静默拒绝，所以
+    // 「置 settled + 写战绩」必须挂在这儿。settled 落库 = 真正的防重；
+    // 内存里的 app.settling 是补另一个洞：两个按钮都没有忙碌闸门，
+    // 连点两下会有两次 mutateSession 各自读到「还没结束」的同一个旧记录。
+    const justEnded = fresh.status === 'ended' && !fresh.settled;
+    const claimed = justEnded && !app.settling.has(sessionId);
+    if (justEnded) {
+        fresh.settled = true;
+        fresh.settledAt = Date.now();
+    }
+    if (claimed) app.settling.add(sessionId);
+
+    const saved = await store.saveSession(fresh);
+    if (claimed) {
+        // 落库成功才算这一局真的打完了；写失败就放开认领，别把这一局钉死在「已结算」上
+        if (saved) await settleProfile(fresh);
+        else app.settling.delete(sessionId);
+    }
     if (app.session?.id === sessionId) app.session = fresh;
     return out === undefined ? fresh : out;
+}
+
+/**
+ * 一局打完：把这一局的战绩与点亮写进每个座位的档案。
+ * 真实角色（名册里的、网络里的、含主视角）走 stats，临时路人走 npcs——两条线同一套字段、同一段累加。
+ * 档位不在这里：档位只在落座那一刻生成（见 werewolfAI 的落座测评）。
+ * **失败只 warn**：战绩没写上也不该让这一局打不完、界面卡住。
+ */
+async function settleProfile(session) {
+    for (const row of engine.finalResult(session)) {
+        const detail = { role: row.role, win: row.win, survived: row.alive, typeId: session.typeId };
+        try {
+            if (row.characterId) {
+                const stat = await store.applyGameResult(row.characterId, detail);
+                if (stat) await store.lightEntries(row.characterId, codex.earnedIds(stat));
+            } else if (row.npcId) {
+                const npc = await store.recordNpcGame(row.npcId, detail);
+                if (npc) await store.lightNpcEntries(row.npcId, codex.earnedIds(npc));
+            }
+        } catch (e) {
+            console.warn('[werewolf] 战绩写入失败', row.name, e);
+        }
+    }
 }
 
 function pushLog(session, text, type = 'system') {
@@ -306,6 +371,9 @@ function renderTopbar(app) {
     } else if (name === 'rules') {
         subtitle = '规则';
         title = getRoomType(app.page.typeId)?.name || '规则';
+    } else if (name === 'handbook') {
+        subtitle = '手册';
+        title = '狼人杀手册';
     } else if (name === 'table' || name === 'spectate') {
         subtitle = name === 'table' ? '对局' : '旁观';
         title = app.session?.name || (name === 'table' ? '牌桌' : '旁观');
@@ -330,7 +398,8 @@ function renderTopbar(app) {
 
 function renderBottom(app) {
     const name = app.page.name;
-    if (['rooms', 'activity', 'me'].includes(name)) {
+    // 手册挂在「我的」下面，所以底栏照旧是这三个页签，「我的」保持高亮
+    if (['rooms', 'activity', 'me', 'handbook'].includes(name)) {
         const tabs = [
             { id: 'rooms', icon: '🏠', label: '房间' },
             { id: 'activity', icon: '🎁', label: '活动' },
@@ -367,6 +436,7 @@ function renderBody(app) {
         case 'type': return renderTypePage(app);
         case 'activity': return renderActivity();
         case 'me': return renderMe(app);
+        case 'handbook': return renderHandbook(app);
         case 'rules': return renderRules(app);
         case 'room': return renderRoom(app);
         case 'table':
@@ -492,7 +562,7 @@ function renderTableCard(app, session) {
     `;
 }
 
-/* ---------------- 活动 / 我的（占位） ---------------- */
+/* ---------------- 活动 ---------------- */
 
 function renderActivity() {
     return `
@@ -503,12 +573,121 @@ function renderActivity() {
     `;
 }
 
+/* ---------------- 我的（主视角自己的档案） ----------------
+ * 三块：档位（落座测评给的）｜战绩（结算写的）｜手册入口。
+ * 「档案不是测评的产物」：谁先来谁先建，缺哪块就说缺哪块——**空着也照显示**，
+ * 不隐藏页面（这一份档案此刻就是这样）。
+ */
+
+function tierBadge(kind, key) {
+    const t = kind === 'flair' ? codex.flairByKey(key) : codex.tierByKey(key);
+    if (!t) return '';
+    const name = kind === 'flair' ? `悟性 · ${t.label}` : t.label;
+    return `<span class="ww-tier-badge ${kind}-${t.key}">${esc(name)}</span>`;
+}
+
 function renderMe(app) {
+    const stat = app.meStat;
+    const played = Number(stat?.played) || 0;
+    const win = Number(stat?.win) || 0;
+    const lose = Number(stat?.lose) || 0;
+    const byRole = Object.entries(stat?.byRole || {})
+        .map(([r, cell]) => `${roleLabel(r)}：${Number(cell?.played) || 0} 局（胜 ${Number(cell?.win) || 0}）`)
+        .join('　');
+
+    const tiers = stat?.level
+        ? `${tierBadge('tier', stat.level)}${tierBadge('flair', stat.flair)}`
+        : `<span class="ww-tier-badge is-none">未测评</span>`;
+
     return `
-        <div class="ww-empty">
-            <div style="font-size:28px;">👤</div>
-            <p>${esc(app.meName)} 的个人信息页还没开放。<br>对局数据已经在记录（局数、胜负、各身份战绩）。</p>
+        <section class="ww-card ww-codex-card">
+            <div class="ww-codex-head">
+                ${avatarHtml(app.me, app.meName)}
+                <div class="ww-codex-name">
+                    <strong>${esc(app.meName)}</strong>
+                    <div class="ww-codex-tiers">${tiers}</div>
+                </div>
+            </div>
+            <p class="ww-codex-why">${stat?.why ? esc(stat.why) : '还没人估过你打狼人杀的水平——等你被邀请上桌，对面会先看看你是个什么样的人。'}</p>
+        </section>
+
+        <div class="ww-section-title"><strong>战绩</strong><span>${played ? `${played} 局` : '还没打过'}</span></div>
+        ${played
+            ? `<div class="ww-line" style="line-height:2;">
+                    <div>${win} 胜　${lose} 负${Number(stat.streak) > 1 ? `　当前 ${Number(stat.streak)} 连胜` : ''}</div>
+                    ${byRole ? `<div style="color:var(--muted);">${esc(byRole)}</div>` : ''}
+                </div>`
+            : `<div class="ww-empty">还没打过一局。<br>打完一局，这里会记下胜负与各身份的战绩。</div>`}
+
+        <div class="ww-section-title"><strong>手册</strong><span>知识随经历点亮</span></div>
+        ${renderHandbookCard()}
+    `;
+}
+
+function renderHandbookCard() {
+    return `
+        <button class="ww-card ww-rules-card" id="wwOpenHandbook">
+            <div class="ww-card-icon">📖</div>
+            <div class="ww-card-main">
+                <div class="ww-card-title">狼人杀手册</div>
+                <div class="ww-card-desc">基础通用规则 + 各房型规则；坐过、打过才点亮的那部分是策略</div>
+            </div>
+            <span class="ww-card-go">翻开 ›</span>
+        </button>
+    `;
+}
+
+/* ---------------- 手册页 ---------------- */
+
+/**
+ * 一条条目：点亮的给正文，没点亮的**只给标题 + 点亮条件**（用户 2026-09-12 定的口径）。
+ * 判定与注入提示词用的是同一个 isLit，所以「手册上亮着的」=「他真拿得到的」。
+ */
+function renderEntry(entry, record) {
+    const lit = codex.isLit(entry, record);
+    const cond = lit ? '' : codex.condText(entry.cond);
+    return `
+        <div class="ww-entry ${lit ? '' : 'is-locked'}">
+            <div class="ww-entry-head">
+                <strong>${esc(entry.title)}</strong>
+                <span class="ww-entry-tier">${esc(codex.ENTRY_TIER_LABEL[entry.tier] || '')}</span>
+            </div>
+            ${lit ? `<p>${esc(entry.text)}</p>` : `<p class="ww-entry-cond">🔒 ${esc(cond || '还没点亮')}</p>`}
         </div>
+    `;
+}
+
+/**
+ * 手册 = 通用规则一节 + 各房型一节（只列有条例的房型）。
+ * 房型那一节的「完整规则」仍走 buildRulesPage（规则正文的唯一出处），这里只加条目层，不重复写规则。
+ */
+function renderHandbook(app) {
+    const record = app.meStat;
+    const litCount = codex.litIds(record).length;
+
+    const section = (title, entries, typeId = null) => {
+        if (!entries.length) return '';
+        return `
+            <div class="ww-section-title"><strong>${esc(title)}</strong><span></span></div>
+            ${typeId ? `<button class="ww-card ww-rules-card" data-rules-type="${typeId}">
+                <div class="ww-card-icon">📜</div>
+                <div class="ww-card-main">
+                    <div class="ww-card-title">${esc(title)} · 完整规则</div>
+                    <div class="ww-card-desc">这一桌怎么打、一夜之间、一个白天、桌上的规矩</div>
+                </div>
+                <span class="ww-card-go">查看 ›</span>
+            </button>` : ''}
+            ${entries.map(e => renderEntry(e, record)).join('')}
+        `;
+    };
+
+    return `
+        <div class="ww-line" style="line-height:1.9;">
+            <div>已点亮 <strong>${litCount}</strong> / ${codex.ENTRIES.length} 条。</div>
+            <div style="color:var(--muted);">灰色的还没亮——条件写在卡片上，坐过、打过自然就有了。</div>
+        </div>
+        ${section('基础通用规则', codex.entriesIn('common'))}
+        ${ROOM_TYPES.map(type => section(type.name, codex.entriesIn(type.typeId), type.typeId)).join('')}
     `;
 }
 
@@ -1437,6 +1616,7 @@ function bindApp(app, close) {
             app.tab = btn.dataset.tab;
             app.page = { name: app.tab };
             await refreshTables(app);
+            if (app.tab === 'me') await refreshMe(app);   // 战绩与点亮可能刚被上一局的结算改过
             renderApp(app, close);
         });
     });
@@ -1444,6 +1624,19 @@ function bindApp(app, close) {
     root.querySelector('#wwOpenRules')?.addEventListener('click', () => {
         app.page = { name: 'rules', typeId: app.page.typeId || null };
         renderApp(app, close);
+    });
+
+    root.querySelector('#wwOpenHandbook')?.addEventListener('click', () => {
+        app.page = { name: 'handbook' };
+        renderApp(app, close);
+    });
+
+    // 手册里翻开的房型完整规则：原路退回手册
+    root.querySelectorAll('[data-rules-type]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            app.page = { name: 'rules', typeId: btn.dataset.rulesType, from: 'handbook' };
+            renderApp(app, close);
+        });
     });
 
     root.querySelectorAll('.ww-type-card').forEach(btn => {
@@ -1750,6 +1943,7 @@ async function runInvite(app, close, targetId) {
     });
 
     app.inflight.delete(held.inviteId);
+    let landedSeat = null;
     await mutateSession(app, sid, s => {
         s.callCount = (s.callCount || 0) + 1;
         const released = releaseReservation(s, held.inviteId);
@@ -1766,11 +1960,16 @@ async function runInvite(app, close, targetId) {
             ownReserved: released
         });
         if (seat === null) { pushLog(s, `${name} 答应了，但已经没座位了`); return; }
+        landedSeat = seat;
         if (res.reply) pushLog(s, `${name}：${res.reply}`);
         const react = res.reaction && res.reaction !== '沉默' ? `——「${res.reaction}」` : '';
         pushLog(s, `${name} 坐到了 ${seat} 号座${react}`);
         if (res.degraded) pushLog(s, `（${name} 那边没有响应，先按模板入场）`);
     });
+
+    // 落座那一刻的测评：**人真坐下了才写**——他这次没答应/没坐上，就等于还没测过，
+    // 下次再请自然还会问一遍；而问过又写不下（写入处挡了已有档位）也不会把估好的东西冲掉。
+    if (landedSeat !== null && res.codex) await store.upsertCodex(targetId, res.codex);
 
     // 这段对话同时也是一段真实的聊天记录：存进去，打开聊天就能看见，不用玩家自己复述
     await postInviteChat(app, {
@@ -1842,6 +2041,7 @@ async function runMatch(app, close) {
     }
     for (const c of picked) if (!seen.has(c.id)) { seen.add(c.id); order.push({ characterId: c.id, seat: null, reaction: '' }); }
 
+    const seatedNow = new Set();
     await mutateSession(app, sid, s => {
         s.callCount = (s.callCount || 0) + 1;
         let landed = 0;
@@ -1850,6 +2050,7 @@ async function runMatch(app, close) {
             const seat = landOn(s, board, { characterId: item.characterId, name: who.name, preferred: item.seat });
             if (seat === null) continue;
             landed += 1;
+            seatedNow.add(item.characterId);
             const react = item.reaction && item.reaction !== '沉默' ? `——「${item.reaction}」` : '';
             pushLog(s, `${who.name} 坐到了 ${seat} 号座${react}`);
         }
@@ -1857,6 +2058,11 @@ async function runMatch(app, close) {
             ? `${app.meName} 匹配到 ${landed} 个人（这次没等到 AI 回应，先按模板入座）`
             : `${app.meName} 匹配到 ${landed} 个人`);
     });
+
+    // 落座那一刻的测评（与邀请那条路同一个口径）：只给真坐下的人写，没坐上的下次再问
+    for (const item of order) {
+        if (item.codex && seatedNow.has(item.characterId)) await store.upsertCodex(item.characterId, item.codex);
+    }
 
     await refreshTables(app);
     renderApp(app, close);
@@ -1879,11 +2085,11 @@ async function runStart(app, close) {
         let identity = randomNpcIdentity();
         for (let i = 0; i < 8 && usedNames.has(identity.name); i++) identity = randomNpcIdentity();
         usedNames.add(identity.name);
+        // 路人档案与真实角色同形（战绩 / 档位 / 点亮都留好了位置），以后要复用同一个路人才有东西可读
         const npcId = store.newNpcId();
-        await store.saveNpc({
-            npcId, name: identity.name, persona: identity.persona,
-            games: 0, wins: 0, typeId: session.typeId, createdAt: Date.now()
-        });
+        await store.saveNpc(store.emptyNpc({
+            npcId, name: identity.name, persona: identity.persona, typeId: session.typeId
+        }));
         npcs.push({ seat, npcId, name: identity.name, persona: identity.persona });
     }
 

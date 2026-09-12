@@ -1,0 +1,664 @@
+/* apps/games/werewolf.css — 狼人杀（风格照末日安全屋：暖色羊皮纸）
+   类名一律 ww- 前缀；根节点 #werewolfRoot（挂在游戏中心 overlay 内） */
+
+#werewolfRoot {
+    --ink: #302c28;
+    --muted: #8d8177;
+    --paper: #f5f0e8;
+    --paper-deep: #e9dfd1;
+    --card: rgba(255, 255, 255, .72);
+    --accent: #a75d3d;
+    --accent-dark: #70412f;
+    --line: rgba(120, 100, 80, .16);
+    --night: #4b4453;
+    height: 100%;
+    overflow: hidden;
+    color: var(--ink);
+    background:
+        radial-gradient(circle at 85% 8%, rgba(190, 132, 83, .18), transparent 28%),
+        linear-gradient(145deg, #f7f1e8, #e9dfd4);
+    font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", sans-serif;
+}
+
+#werewolfRoot * { box-sizing: border-box; }
+
+.ww-app { height: 100%; display: flex; flex-direction: column; }
+
+/* ---------------- 顶栏 ---------------- */
+
+.ww-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 16px 10px;
+    flex-shrink: 0;
+}
+
+.ww-topbar button {
+    border: 0;
+    color: var(--ink);
+    background: rgba(255, 255, 255, .55);
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+.ww-brand { text-align: center; min-width: 0; }
+
+.ww-brand small {
+    display: block;
+    color: var(--muted);
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+.ww-brand strong { font-size: 14px; letter-spacing: 1px; }
+
+/* ---------------- 滚动区 ---------------- */
+
+.ww-scroll {
+    flex: 1;
+    overflow: auto;
+    padding: 0 13px 18px;
+    scrollbar-width: none;
+}
+
+.ww-scroll::-webkit-scrollbar { display: none; }
+
+/* ---------------- 底部分栏 ---------------- */
+
+.ww-tabbar {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 6px 10px 10px;
+    border-top: 1px solid var(--line);
+    background: rgba(255, 255, 255, .5);
+}
+
+.ww-tab {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 7px 4px;
+    border-radius: 14px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.ww-tab i { font-style: normal; font-size: 16px; }
+
+.ww-tab.active {
+    background: rgba(167, 93, 61, .12);
+    color: var(--accent);
+}
+
+/* ---------------- 区块标题 ---------------- */
+
+.ww-section-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 14px 2px 8px;
+}
+
+.ww-section-title strong { font-size: 13px; }
+.ww-section-title span { font-size: 10px; color: var(--muted); }
+
+/* ---------------- 英雄卡（房间页顶部） ---------------- */
+
+.ww-hero {
+    position: relative;
+    overflow: hidden;
+    margin: 2px 0 14px;
+    padding: 20px 18px 16px;
+    border-radius: 25px;
+    background: linear-gradient(135deg, rgba(70, 60, 56, .96), rgba(117, 72, 55, .94));
+    color: #fff8ee;
+    box-shadow: 0 12px 24px rgba(77, 49, 35, .18);
+}
+
+.ww-hero .ww-eyebrow {
+    font-size: 10px;
+    letter-spacing: 3px;
+    font-weight: 700;
+    color: #e9b993;
+    text-transform: uppercase;
+}
+
+.ww-hero h2 { margin: 6px 0 4px; font-size: 21px; letter-spacing: 1px; }
+.ww-hero p { margin: 0; font-size: 11px; color: rgba(255, 248, 238, .78); line-height: 1.6; }
+
+.ww-hero-moon {
+    position: absolute;
+    right: 18px;
+    top: 16px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #f5d7ad;
+    box-shadow: 0 0 26px rgba(245, 215, 173, .36);
+}
+
+/* ---------------- 卡片 ---------------- */
+
+.ww-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    border-radius: 17px;
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+}
+
+.ww-card-icon {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 13px;
+    background: rgba(233, 223, 209, .8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+}
+
+.ww-card-main { flex: 1; min-width: 0; }
+
+.ww-card-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.ww-card-desc {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.ww-card-meta { margin-top: 4px; font-size: 10px; color: var(--muted); }
+
+/* 卡片右侧的动作字（进入 › / 查看 ›） */
+.ww-card-go { flex-shrink: 0; color: var(--accent); font-size: 12px; }
+
+/* 桌卡：已经开局、或不是我参与的桌，压低一点存在感 */
+.ww-card.is-quiet { background: rgba(255, 255, 255, .5); box-shadow: none; }
+
+/* 分类卡、桌卡、规则卡都是 <button>，需要显式声明外框与字体 */
+.ww-type-card,
+.ww-table-card,
+.ww-rules-card { width: 100%; text-align: left; font-family: inherit; color: inherit; cursor: pointer; }
+
+/* 规则卡片：稍暗的强调卡 */
+.ww-rules-card {
+    border: 1px dashed rgba(167, 93, 61, .42);
+    background: rgba(241, 223, 208, .72);
+}
+
+/* ---------------- 按钮 ---------------- */
+
+.ww-btn {
+    border: 0;
+    border-radius: 11px;
+    color: #fff;
+    background: var(--accent);
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ww-btn.ghost { background: #e8ddd1; color: #6d5749; }
+.ww-btn.danger { background: #b0685c; }
+.ww-btn.block { width: 100%; }
+.ww-btn:disabled { cursor: default; opacity: .42; }
+
+.ww-small-button {
+    border: 0;
+    border-radius: 11px;
+    background: var(--accent);
+    color: #fff;
+    padding: 8px 9px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ww-small-button.ghost { background: #e8ddd1; color: #6d5749; }
+.ww-small-button:disabled { cursor: default; opacity: .42; }
+
+/* 底部动作条 */
+.ww-bottom {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 8px 13px 12px;
+}
+
+.ww-bottom button {
+    flex: 1;
+    border: 0;
+    border-radius: 14px;
+    padding: 11px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    color: #6d5749;
+    background: #e8ddd1;
+    cursor: pointer;
+}
+
+.ww-bottom button.primary { color: #fff; background: var(--accent); }
+.ww-bottom button:disabled { cursor: default; opacity: .42; }
+
+/* ---------------- 标签 pill ---------------- */
+
+.ww-pill {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    background: #f1dfd0;
+    color: #96583c;
+}
+
+.ww-pill.wolf { background: #e6d7dd; color: #8a4a63; }
+.ww-pill.good { background: #dde8d8; color: #5d7a4e; }
+.ww-pill.muted { background: rgba(233, 223, 209, .9); color: var(--muted); }
+
+/* ---------------- 座位网格 ---------------- */
+
+.ww-seats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 9px;
+}
+
+.ww-seats.single { grid-template-columns: 1fr; }
+
+.ww-seat {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+    min-width: 0;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.ww-seat.is-empty {
+    border-style: dashed;
+    border-color: rgba(167, 93, 61, .34);
+    background: rgba(255, 255, 255, .42);
+    box-shadow: none;
+}
+
+.ww-seat.is-me { border-color: rgba(167, 93, 61, .6); background: rgba(241, 223, 208, .8); }
+.ww-seat.is-reserved { opacity: .72; }
+.ww-seat.is-dead { opacity: .5; }
+.ww-seat:disabled { cursor: default; }
+
+.ww-seat-num {
+    width: 22px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+}
+
+.ww-avatar {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #e0e0e0;
+}
+
+.ww-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+.ww-avatar-fallback {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #e3d8ca;
+    color: #8d8177;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.ww-seat-main { flex: 1; min-width: 0; }
+
+.ww-seat-name {
+    font-size: 12px;
+    font-weight: 700;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ww-seat-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--muted);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ww-seat-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+
+/* ---------------- 留言流 / 发言流 ---------------- */
+
+.ww-line {
+    padding: 9px 11px;
+    margin-bottom: 7px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .62);
+    border: 1px solid rgba(255, 255, 255, .7);
+    font-size: 11.5px;
+    line-height: 1.62;
+}
+
+.ww-line-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 3px;
+}
+
+.ww-line.system { background: rgba(241, 223, 208, .6); color: #6d5749; }
+.ww-line.mine { background: rgba(228, 236, 224, .78); }
+.ww-line.night { background: rgba(75, 68, 83, .1); }
+
+.ww-line .ww-line-body { white-space: pre-wrap; word-break: break-word; }
+
+/* ---------------- 标记（主视角预设标签） ---------------- */
+
+.ww-mark-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+
+.ww-mark-chip {
+    border: 1px solid rgba(167, 93, 61, .34);
+    background: rgba(255, 255, 255, .7);
+    color: #6d5749;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.ww-mark-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ---------------- 状态点 / 输入 ---------------- */
+
+.ww-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    display: inline-block;
+}
+
+.ww-input {
+    width: 100%;
+    min-height: 62px;
+    resize: vertical;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .82);
+    padding: 9px 11px;
+    font-size: 12px;
+    line-height: 1.6;
+    font-family: inherit;
+    color: var(--ink);
+}
+
+.ww-input:focus { outline: none; border-color: rgba(167, 93, 61, .5); }
+
+/* ---------------- 空态 ---------------- */
+
+.ww-empty {
+    padding: 26px 14px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.7;
+}
+
+/* ---------------- 弹窗 ---------------- */
+
+.ww-modal-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(42, 33, 29, .48);
+    backdrop-filter: blur(4px);
+}
+
+.ww-modal {
+    width: min(100%, 330px);
+    max-height: 82%;
+    overflow: auto;
+    border-radius: 22px;
+    background: var(--paper);
+    padding: 16px;
+    box-shadow: 0 18px 50px rgba(35, 23, 16, .28);
+    scrollbar-width: none;
+}
+
+.ww-modal::-webkit-scrollbar { display: none; }
+.ww-modal h3 { margin: 0 0 4px; font-size: 15px; }
+.ww-modal .ww-modal-sub { margin: 0 0 12px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+.ww-choice {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, .8);
+    border-radius: 13px;
+    padding: 10px;
+    margin-bottom: 7px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.ww-choice:hover { background: #f3e7db; }
+.ww-choice:disabled { opacity: .45; cursor: default; }
+.ww-choice.danger { color: #8d3f33; border-color: rgba(176, 104, 92, .46); background: rgba(255, 245, 242, .86); }
+
+/* 邀请面板里的一行：头像 + 名字 + 「邀请 ›」 */
+.ww-choice-row { display: flex; align-items: center; gap: 8px; }
+.ww-choice-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ww-choice-go { flex-shrink: 0; color: var(--accent); font-size: 11px; }
+
+.ww-modal-close {
+    width: 100%;
+    border: 0;
+    border-radius: 13px;
+    background: #e7ded5;
+    color: #6d5749;
+    padding: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    margin-top: 4px;
+}
+
+/* ---------------- toast ---------------- */
+
+.ww-toast {
+    position: absolute;
+    top: 55px;
+    left: 50%;
+    transform: translate(-50%, -7px);
+    max-width: 78%;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(48, 44, 40, .92);
+    color: #fff8ee;
+    font-size: 11px;
+    opacity: 0;
+    pointer-events: none;
+    transition: .25s ease;
+    z-index: 30;
+}
+
+.ww-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ================================================================ */
+/*  对局页                                                          */
+/* ================================================================ */
+
+/* 名字与状态各占一行（span 默认 inline 会把两行挤成一行） */
+.ww-seat-name,
+.ww-seat-sub { display: block; }
+
+/* ---- 阶段条 ---- */
+
+.ww-phase {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 9px;
+    padding: 9px 12px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(70, 60, 56, .96), rgba(117, 72, 55, .94));
+    box-shadow: 0 10px 24px rgba(60, 42, 32, .18);
+    color: #fff6ea;
+}
+
+.ww-phase-main { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.ww-phase-main strong {
+    font-size: 12.5px;
+    letter-spacing: .4px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ww-phase-main .ww-dot {
+    color: #f5d7ad;
+    box-shadow: 0 0 8px rgba(245, 215, 173, .9);
+}
+
+.ww-phase-sub {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
+    font-size: 9.5px;
+    color: rgba(255, 246, 234, .72);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* ---- 我的身份牌 ---- */
+
+.ww-identity {
+    margin-bottom: 9px;
+    padding: 10px 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+}
+
+.ww-identity.good { border-color: rgba(93, 122, 78, .34); background: rgba(221, 232, 216, .62); }
+.ww-identity.wolf { border-color: rgba(138, 74, 99, .34); background: rgba(230, 215, 221, .62); }
+.ww-identity-head { display: flex; align-items: baseline; gap: 8px; }
+.ww-identity-head small { font-size: 9px; letter-spacing: 2px; color: var(--muted); }
+.ww-identity-head strong { font-size: 14px; }
+.ww-identity p { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: #6d5749; }
+
+/* ---- 紧凑座位（对局页一屏放得下 6 席） ---- */
+
+.ww-seats.compact {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.ww-seats.compact .ww-seat {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 5px;
+    border-radius: 14px;
+    text-align: center;
+}
+
+.ww-seats.compact .ww-seat-num { width: 100%; font-size: 9px; }
+.ww-seats.compact .ww-avatar,
+.ww-seats.compact .ww-avatar-fallback { width: 28px; height: 28px; font-size: 13px; }
+.ww-seats.compact .ww-seat-main { width: 100%; }
+.ww-seats.compact .ww-seat-name { font-size: 11px; }
+.ww-seats.compact .ww-seat-sub { font-size: 9px; margin-top: 1px; }
+.ww-seats.compact .ww-seat-tags { justify-content: center; }
+
+/* 该他动了：描一圈暖色，但不说他是什么身份 */
+.ww-seat.is-turn {
+    border-color: rgba(167, 93, 61, .75);
+    box-shadow: 0 0 0 2px rgba(167, 93, 61, .18), 0 5px 14px rgba(92, 68, 50, .06);
+}
+
+/* ---- 发言流 ---- */
+
+.ww-line-head .ww-avatar,
+.ww-line-head .ww-avatar-fallback { width: 18px; height: 18px; font-size: 10px; }
+.ww-line-head strong { font-size: 10.5px; color: #6d5749; font-weight: 700; }
+
+/* ---- 底部：输入与点选 ---- */
+
+.ww-bottom.column { flex-direction: column; align-items: stretch; gap: 7px; }
+.ww-composer-row { display: flex; gap: 8px; }
+.ww-vote-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.ww-hint { font-size: 10px; color: var(--muted); line-height: 1.5; }

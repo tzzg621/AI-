@@ -52,6 +52,32 @@ export const GUEST_TIER = 'normal';
 /** 没有档位（还没测评）但有档案时，策略条目按中庸给，别让没估过的人白拿满配 */
 export const NO_TIER_CAP = 6;
 
+/**
+ * 悟性 → 这一局里的**记忆带宽**（用户 2026-09-13 定）：能同时盯住几个人（`watch`）、
+ * 别人的普通发言还记得住几条（`tail`）。
+ *
+ * 悟性本来是「预留」的一栏（见上面 FLAIR_TIERS 的注释「正职是以后的成长速度」），这就是它的正职：
+ * 水平管他懂多少（条目额度），悟性管他记得住多少。**数字是可调的初值**，用户玩两局再改。
+ */
+export const FLAIR_WATCH = {
+    dull: { watch: 1, tail: 6 },
+    steady: { watch: 2, tail: 10 },
+    quick: { watch: 3, tail: 16 },
+    sharp: { watch: 4, tail: 24 }
+};
+
+/** 没测评 / 悟性认不出的按「一般」兜底（照 NO_TIER_CAP 的写法：别让没估过的人白拿满配） */
+export const DEFAULT_WATCH_FLAIR = 'steady';
+
+/**
+ * 这个座位的记忆带宽。`record` 可以是 null（没档案的路人 / 没测评的人）——一样有兜底，
+ * 因为「记性」不能缺席：缺席就等于不截断，反而成了最强的那一档。
+ */
+export function watchPlan(record) {
+    const key = flairByKey(record?.flair)?.key;
+    return FLAIR_WATCH[key] || FLAIR_WATCH[DEFAULT_WATCH_FLAIR];
+}
+
 const byWord = list => new Map(list.flatMap(t => [t.key, ...t.aliases].map(w => [w, t])));
 const TIER_BY_WORD = byWord(TIERS);
 const FLAIR_BY_WORD = byWord(FLAIR_TIERS);
@@ -95,9 +121,9 @@ const TIER_ORDER = { basic: 0, principle: 1, meta: 2 };
 export const ENTRIES = [
     /* —— 通用 · 流程纪律（always：不设门槛，谁坐下谁拿到） —— */
     {
-        id: 'common_flow', scope: 'common', tier: 'basic', cond: 'always',
+        id: 'common_flow', scope: ['rookie', 'blitz', 'story'], tier: 'basic', cond: 'always',
         title: '发言与投票的秩序',
-        text: '天亮后按座号顺序依次发言，每人这一轮只说一次，已经说过的人不会再开口；投票是投完统一开票——投的时候谁也看不到别人的票，票数最高的人出局，平票则这一轮没人出局。'
+        text: '天亮了先公布昨夜谁出局（没人出局就是平安夜），出局的人按座号挨个走一遍自己的流程，走完才轮到活人发言。天亮后按座号顺序依次发言，每人这一轮只说一次，已经说过的人不会再开口；投票是投完统一开票——投的时候谁也看不到别人的票，票数最高的人出局，平票则这一轮没人出局。'
     },
     {
         id: 'common_private', scope: 'common', tier: 'basic', cond: 'always',
@@ -105,7 +131,7 @@ export const ENTRIES = [
         text: '你只知道自己的身份、自己夜里看到的东西、和场上公开发生过的事。别人说的话都不算证据，只有出局结果和票型骗不了人。'
     },
     {
-        id: 'common_win', scope: 'common', tier: 'basic', cond: 'always',
+        id: 'common_win', scope: ['rookie', 'blitz', 'story'], tier: 'basic', cond: 'always',
         title: '这局怎么算赢',
         text: '狼人全部出局就是好人赢；狼人数量追平好人（比如 2 狼对 2 好人）就是狼人赢。好人每投错一个，就离输近一步。'
     },
@@ -195,6 +221,41 @@ export const ENTRIES = [
         id: 'story_tell', scope: 'story', tier: 'principle', cond: 'type:story:2',
         title: '扮演局里的语气变化',
         text: '一个人突然换了称呼、变了口气，说明他心里的事变了。未必和这一局有关，但值得记一笔。'
+    },
+
+    /* —— 12 人标准局 ——
+     * 这一桌的规矩与 6 人局不同（屠边、PK、遗言、女巫、白痴），所以 common_flow / common_win
+     * 两条通用的收成 ['rookie','blitz','story']，这一份单独给它。cond 一律 'always'：
+     * **不知道规则不该由档位决定**（何况流程纪律不占策略额度）。 */
+    {
+        id: 'std12_win', scope: 'standard12', tier: 'basic', cond: 'always',
+        title: '这一桌是屠边',
+        text: '这一桌不数人头：狼人全灭是好人赢，但神职全灭或者平民全灭，狼人就赢了。所以好人输，常常不是被刀光，而是某一类人先没了。'
+    },
+    {
+        id: 'std12_flow', scope: 'standard12', tier: 'basic', cond: 'always',
+        title: '平票要上台 PK',
+        text: '天亮后按座号顺序依次发言，投完统一开票，票数最高的人出局。最高票并列时，并列的几位上台各说一段，台下的人再投一轮——这一轮只能投台上的人或者弃票，再平票就没人出局。'
+    },
+    {
+        id: 'std12_words', scope: 'standard12', tier: 'basic', cond: 'always',
+        title: '遗言',
+        text: '第一夜的死者（被刀、被毒、被猎人开枪带走的都算）与白天被投票出局的人，都能留一段遗言，所有人都听得到；第二夜之后夜里出局的人不再开口。天亮了先公布昨夜谁出局，死者挨个走完自己的流程（等待发动技能、然后才是遗言）才轮到活人发言。'
+    },
+    {
+        id: 'std12_witch', scope: 'standard12', tier: 'basic', cond: 'always',
+        title: '女巫的两瓶药',
+        text: '女巫有一瓶解药一瓶毒药，各只能用一次，同一夜只能开一瓶；解药还在时，她每夜都会被告知谁被刀（解药一用掉就不再告诉她了）。第一夜她能救自己，之后不能自救，也不能毒自己。'
+    },
+    {
+        id: 'std12_idiot', scope: 'standard12', tier: 'basic', cond: 'always',
+        title: '被投出去不一定是死',
+        text: '白痴被投票出局时会翻牌免死：身份当场公开，此后没有投票权、也不会再被投票放逐，但夜里照旧会被狼杀死。'
+    },
+    {
+        id: 'std12_hunter', scope: 'standard12', tier: 'basic', cond: 'always',
+        title: '猎人不是什么时候都能开枪',
+        text: '猎人被刀、或被投票出局，都能开枪带走一个人；被女巫毒死则不能开枪。他开枪在自己遗言之前，所以枪响之后才知道他最后想说什么。'
     }
 ];
 
@@ -202,8 +263,17 @@ const ENTRY_BY_ID = new Map(ENTRIES.map(e => [e.id, e]));
 
 export function entryById(id) { return ENTRY_BY_ID.get(id) || null; }
 
+/**
+ * 一条条目属不属于这一层。scope 可以是**字符串，也可以是数组**——
+ * 同一条规矩给几个房型共用时写数组（比如「平票无人出局」三张 6 人房型都有，
+ * 12 人局是 PK，不能共用一个 scope）。
+ */
+function inScope(entry, scope) {
+    return Array.isArray(entry.scope) ? entry.scope.includes(scope) : entry.scope === scope;
+}
+
 /** 某一层（通用 / 某个房型）的全部条目，顺序就是声明顺序 */
-export function entriesIn(scope) { return ENTRIES.filter(e => e.scope === scope); }
+export function entriesIn(scope) { return ENTRIES.filter(e => inScope(e, scope)); }
 
 /* ---------------- 点亮条件 ---------------- */
 
@@ -257,7 +327,7 @@ export function isLit(entry, record, { isGuest = false } = {}) {
     // 流程纪律不设门槛：这一桌的规矩，谁坐下谁知道（不需要档案，也不需要打过）
     if (entry.cond === 'always') return true;
     if ((record?.unlocked || []).includes(entry.id)) return true;      // 曾经授予过的，一直算数
-    if (isGuest) return entry.scope === 'common' && entry.tier === 'basic';
+    if (isGuest) return inScope(entry, 'common') && entry.tier === 'basic';
     return !!record && litBy(entry.cond, record);
 }
 
@@ -277,7 +347,7 @@ export function earnedIds(record) {
 export function litIds(record, { isGuest = false, roomScope = null } = {}) {
     const out = new Set();
     for (const e of ENTRIES) {
-        const inRoom = e.scope === 'common' || e.scope === roomScope;
+        const inRoom = inScope(e, 'common') || (roomScope != null && inScope(e, roomScope));
         if (inRoom && isLit(e, record, { isGuest })) out.add(e.id);
     }
     for (const id of (record?.unlocked || [])) if (ENTRY_BY_ID.has(id)) out.add(id);

@@ -256,6 +256,7 @@
 /* 底部动作条 */
 .ww-bottom {
     display: flex;
+    position: relative;   /* @ 候选浮层挂在它上沿往上弹 */
     gap: 8px;
     flex-shrink: 0;
     padding: 8px 13px 12px;
@@ -407,6 +408,8 @@
 }
 
 .ww-line.system { background: rgba(241, 223, 208, .6); color: #6d5749; }
+/* 遗言：同一个人最后一段话，压一点灰、左边一道竖线，翻流水时一眼看得出来 */
+.ww-line.words { background: rgba(233, 223, 209, .58); border-left: 2px solid rgba(150, 88, 60, .3); }
 .ww-line.mine { background: rgba(228, 236, 224, .78); }
 .ww-line.night { background: rgba(75, 68, 83, .1); }
 /* 狼队频道：私有事件，只出现在「我这一局是狼」的那块屏幕上 */
@@ -417,6 +420,54 @@
 }
 
 .ww-line .ww-line-body { white-space: pre-wrap; word-break: break-word; }
+
+/* 投票那条消息尾巴上的小圆点：花钻石看这一票的心声（道具，入口见 werewolf.js 的 openHeart）。
+   形状照灵犀的提及点（apps/lingxi.css 的 .lx-mention-dot），配色换成这儿的暖色；
+   那边是绝对定位挂在卡片角上，这边跟在票型文字后面，所以用 inline-grid 跟文字同一行。 */
+.ww-heart-dot {
+    display: inline-grid;
+    width: 15px;
+    height: 15px;
+    margin-left: 5px;
+    padding: 0;
+    place-items: center;
+    vertical-align: -3px;
+    border: 1px solid rgba(167, 93, 61, .3);
+    border-radius: 50%;
+    color: var(--accent);
+    background: rgba(241, 223, 208, .8);
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+    opacity: .75;
+    transition: transform .16s ease, opacity .16s ease, background .16s ease;
+}
+
+.ww-heart-dot::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.ww-heart-dot:hover { opacity: 1; background: rgba(233, 209, 190, .95); transform: scale(1.12); }
+.ww-heart-dot:active { transform: scale(.94); }
+
+/* 弹层里那两段：一句解释（灰的），以及心声正文（像引了句话） */
+.ww-heart-hint { font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+
+.ww-heart-text {
+    padding: 10px 12px;
+    border-left: 2px solid rgba(167, 93, 61, .3);
+    border-radius: 0 10px 10px 0;
+    background: rgba(241, 223, 208, .5);
+    color: #6d5749;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
 
 /* ---------------- 标记（主视角预设标签） ---------------- */
 
@@ -705,13 +756,17 @@
 .ww-identity p { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: #6d5749; }
 .ww-identity .ww-check-latest { font-style: normal; font-weight: 700; color: #8a4a63; }
 
-/* ---- 紧凑座位（对局页一屏放得下 6 席） ---- */
+/* ---- 紧凑座位（对局页一屏放得下全桌） ----
+   列数由板子给（tableColumns，默认 3 = 6 人局的 3×2）；12 人局是 4 列 × 3 行。
+   座位卡本身是同一个尺寸，换的只是横排几个 —— 加列就把整桌压矮一行。 */
 
 .ww-seats.compact {
     grid-template-columns: repeat(3, 1fr);
     gap: 6px;
     margin-bottom: 10px;
 }
+
+.ww-seats.compact.c4 { grid-template-columns: repeat(4, 1fr); gap: 5px; }
 
 .ww-seats.compact .ww-seat {
     flex-direction: column;
@@ -749,3 +804,101 @@
 .ww-vote-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .ww-hint { font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+/* ---------------- 赛后复盘（牌摊开之后的桌边群聊） ---------------- */
+
+/* 对话框里的 @ 候选：贴在这一条底栏的上沿往上弹，不占版面高度 */
+.ww-mention-list {
+    display: none;
+    position: absolute;
+    left: 13px;
+    right: 13px;
+    bottom: calc(100% - 10px);
+    max-height: 170px;
+    overflow-y: auto;
+    padding: 5px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .97);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 26px rgba(92, 68, 50, .16);
+    z-index: 6;
+}
+
+.ww-mention-list.open { display: block; }
+
+.ww-at-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    padding: 8px 10px;
+    font-size: 11.5px;
+    font-family: inherit;
+    color: #6d5749;
+    cursor: pointer;
+}
+
+.ww-at-item:hover { background: rgba(241, 223, 208, .7); }
+
+/* 合并同类：主视角自己的那条靠右，别人的靠左 */
+.ww-review {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 4px;
+}
+
+.ww-review-title {
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin: 14px 0 10px;
+}
+
+.ww-rv-line {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    max-width: 86%;
+    margin-bottom: 8px;
+}
+
+.ww-rv-line.mine { align-self: flex-end; align-items: flex-end; }
+
+.ww-rv-head {
+    font-size: 9.5px;
+    color: var(--muted);
+    margin: 0 4px 3px;
+}
+
+.ww-rv-bubble {
+    padding: 8px 11px;
+    border-radius: 14px 14px 14px 4px;
+    background: rgba(255, 255, 255, .78);
+    border: 1px solid rgba(255, 255, 255, .8);
+    font-size: 11.5px;
+    line-height: 1.62;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ww-rv-line.mine .ww-rv-bubble {
+    border-radius: 14px 14px 4px 14px;
+    background: rgba(228, 236, 224, .9);
+}
+
+/* 点名的那个名字：看得出来这是在叫谁 */
+.ww-rv-at { color: #96583c; font-weight: 700; }
+
+/* 「正在想…」「听到了，待会儿说」：虚线气泡，一眼看得出还没落地 */
+.ww-rv-line.thinking .ww-rv-bubble {
+    background: transparent;
+    border: 1px dashed rgba(167, 93, 61, .38);
+    color: var(--muted);
+    font-size: 10.5px;
+}
+
+/* 自动接话开着的时候，开关自己要看得出来是开着的 */
+.ww-bottom button.on { background: rgba(167, 93, 61, .16); color: #96583c; }

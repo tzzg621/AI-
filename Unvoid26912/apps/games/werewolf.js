@@ -11,8 +11,8 @@ import { getAllCharacterIds, getCharacterNameById } from '../characterManager.js
 import { getAvatarHtml } from '../../store/ImageCache.js';
 import { esc } from '../../store/utils.js';
 import {
-    ROOM_TYPES, getRoomType, getBoard, MARK_TAGS, buildRulesPage, roleLabel, randomNpcIdentity,
-    revealModeOf, revealLabel
+    ROOM_TYPES, getRoomType, getBoard, markTagsOf, buildRulesPage, roleLabel, randomNpcIdentity,
+    revealModeOf, revealLabel, tableColumnsOf, BOARDS
 } from './werewolfRooms.js';
 import * as store from './werewolfStore.js';
 import * as engine from './werewolfEngine.js';
@@ -68,12 +68,23 @@ export async function start(overlay, globalState, onBack) {
         inflight: new Map(),  // inviteId -> { characterId, seat, name }：还在飞的邀请
         settling: new Set(),  // 已经认领了结算的那几局（防同一次结束被算两遍战绩）
         meStat: null,         // 主视角自己的档案（「我的」页与手册页读它）
+        recentEnded: [],      // 最近结束、还能回去复盘的桌（打完就地在桌上聊，退出后靠它回来）
+        review: {
+            draft: '',          // 复盘输入框草稿（不落库，跟 app.draft 一个性质）
+            timers: new Map(),  // 座号 -> 计时器：谁正攒着一次「窗口尽头再补」的调用
+            readyAt: new Map(), // 座号 -> 这个座位下一次可以直接开口的时刻
+            thinking: new Set(),// 座号 -> 正在调 AI（渲染成「正在想…」）
+            pending: new Set(), // 座号 -> 他还在说的时候又被点了一次：这一段落地后接着再说
+            picker: null        // @ 候选项（只在内存里，跟着输入框光标走）
+        },
+        reviewChain: Promise.resolve(),   // 复盘消息的写队列：落库是「读-改-写」，必须串起来
         closed: false
     };
 
     const close = () => {
         if (app.closed) return;
         app.closed = true;
+        clearReviewTimers(app);           // 关掉整个模块 = 退出房间：不再触发任何新调用
         document.removeEventListener('click', app.backHandler, true);
         root.remove();
         onBack?.();
@@ -127,8 +138,10 @@ async function leaveSubPage(app, close) {
     }
     app.session = null;
     app.readonly = false;
-    // 从桌/规则页回分类页，从分类页回首页
-    app.page = page.name === 'type'
+    clearReviewTimers(app);   // 退出这张桌：还在等的窗口全掐掉，不再触发新调用
+    // 从桌/规则页回分类页，从分类页回首页；**从首页那列「最近结束」进的桌，退回首页**
+    // （那一列长在首页上，房型页他根本没去过，别把人甩到一个没去过的页面）
+    app.page = (page.name === 'type' || page.from === 'rooms')
         ? { name: 'rooms' }
         : (page.typeId ? { name: 'type', typeId: page.typeId } : { name: app.tab || 'rooms' });
     await refreshTables(app);
@@ -145,6 +158,8 @@ async function refreshTables(app) {
     for (const list of Object.values(map)) list.sort((a, b) => (a.tableNo || 0) - (b.tableNo || 0));
     app.typeTables = map;
     app.lockedSession = active.find(s => (s.participantIds || []).includes(app.me)) || null;
+    // 打完的桌不在活动列表里，但它还开着口子让人回去复盘
+    app.recentEnded = await store.listRecentEndedSessions(3);
 }
 
 function tablesOf(app, typeId) {
@@ -460,6 +475,11 @@ function renderRoomList(app) {
 
         <div class="ww-section-title"><strong>房间分类</strong><span>${ROOM_TYPES.length} 类</span></div>
         ${ROOM_TYPES.map(type => renderTypeCard(app, type)).join('')}
+
+        ${(app.recentEnded || []).length ? `
+            <div class="ww-section-title"><strong>最近结束</strong><span>可以回去复盘</span></div>
+            ${app.recentEnded.map(s => renderTableCard(app, s)).join('')}
+        ` : ''}
     `;
 }
 
@@ -469,7 +489,7 @@ function renderRulesCard() {
             <div class="ww-card-icon">📖</div>
             <div class="ww-card-main">
                 <div class="ww-card-title">规则与角色</div>
-                <div class="ww-card-desc">6 人板子怎么打、各角色的能力、胜负条件</div>
+                <div class="ww-card-desc">各类板子怎么打、各角色的能力、胜负条件</div>
             </div>
             <span class="ww-card-go">查看 ›</span>
         </button>
@@ -544,6 +564,14 @@ function renderTableCard(app, session) {
         pill = `<span class="ww-pill muted">准备中</span>`;
         action = mine ? '继续准备' : (seated ? '旁观' : '空桌');
         cls = mine ? '' : 'is-quiet';
+    } else if (session.status === 'ended' || session.status === 'voided') {
+        // 打完的桌不回牌桌，回桌边——就地复盘那一摊
+        const over = session.status === 'ended'
+            ? (session.winner === 'wolf' ? '狼人赢' : session.winner === 'good' ? '好人赢' : '打完了')
+            : '流局';
+        pill = `<span class="ww-pill muted">${over}</span>`;
+        action = '去复盘';
+        cls = mine ? '' : 'is-quiet';
     } else {
         pill = `<span class="ww-pill good">进行中</span>`;
         action = mine ? '回到牌桌' : '旁观';
@@ -555,7 +583,7 @@ function renderTableCard(app, session) {
             <div class="ww-card-main">
                 <div class="ww-card-title">${esc(session.name || '这一桌')}${mine ? '<span class="ww-pill">你在这桌</span>' : ''}${pill}</div>
                 <div class="ww-card-desc">${esc((session.seats || []).map(s => s.name).filter(Boolean).slice(0, 6).join('、') || '还没有人坐下')}</div>
-                <div class="ww-card-meta">${seated}/${board.seats} 人${holding ? ` · ${holding} 个邀请在路上` : ''}${session.status === 'forming' ? '' : ` · 第 ${session.round || 1} 天`}</div>
+                <div class="ww-card-meta">${seated}/${board.seats} 人${holding ? ` · ${holding} 个邀请在路上` : ''}${session.status === 'forming' || session.status === 'ended' || session.status === 'voided' ? '' : ` · 第 ${session.round || 1} 天`}${(session.review || []).length ? ` · 桌边聊了 ${session.review.length} 句` : ''}</div>
             </div>
             <span class="ww-card-go">${action} ›</span>
         </button>
@@ -805,20 +833,36 @@ function mySeatOf(app, session) {
 }
 
 /**
- * 夜里这一步该不该我亲手做：'guard' | 'wolf' | 'seer' | 'hunter' | null（不属于我就交给 AI）。
+ * 夜里这一步该不该我亲手做：'guard' | 'wolf' | 'seer' | 'witch' | 'hunter' | null（不属于我就交给 AI）。
  * 只看「阶段 + 我在这一局里的身份」，**不能拿 ai.defaultActor 比对**——狼永远返回座号最小的活狼，
  * 坐在 4 号的狼玩家会永远轮不到自己动手。
- * 猎人那一条必须在「我还活着」之前判：轮到他开枪的时候他已经出局了。
+ *
+ * 猎人两条都得在「我还活着」之前判，因为轮到他时他都已经出局了：
+ * 夜里被刀那一拍（他还没死，但已经知道自己要死），以及白天被票出局后补枪那一拍。
+ * 没被刀的那些夜他什么都不做，也就不该给他一条选人条（跟「预言家不在世」那一拍一样点一下就过去）。
  */
 function myNightDuty(app, session) {
     if (!session || app.readonly || isOver(session)) return null;
     const mine = mySeatOf(app, session);
     if (!mine) return null;
-    if (session.phase === 'hunter_shot') return session.pendingShot?.seat === mine.seat ? 'hunter' : null;
+    // 被票出局的人挨个走流程：轮到我的那一下，若我要补的那一枪由我自己决定
+    if (session.phase === 'skill_wait') {
+        const cur = engine.currentDeath(session);
+        return cur?.seat === mine.seat && cur.act === 'shot' ? 'hunter' : null;
+    }
+    if (session.phase === 'night_hunter') {
+        return (mine.role === 'hunter' && mine.alive !== false
+            && engine.hunterWakesTonight(session) === mine.seat) ? 'hunter' : null;
+    }
     if (mine.alive === false) return null;
     if (session.phase === 'night_guard') return mine.role === 'guard' ? 'guard' : null;
     if (session.phase === 'night_wolf') return mine.role === 'werewolf' ? 'wolf' : null;
     if (session.phase === 'night_seer') return mine.role === 'seer' ? 'seer' : null;
+    // 女巫：两瓶药都用完了就没什么可点的（跟守卫不在世那一拍一样，点一下就过去）
+    if (session.phase === 'night_witch') {
+        if (mine.role !== 'witch') return null;
+        return ai.nightTargets(session, 'witch', mine.seat).length ? 'witch' : null;
+    }
     return null;
 }
 
@@ -842,6 +886,7 @@ function visibleRoleOf(app, session, seat) {
     const mine = mySeatOf(app, session);
     if (isOver(session)) return roleLabel(seat.role);                 // 局终：全场公开
     if (mine && seat.seat === mine.seat) return roleLabel(seat.role); // 自己的底牌
+    if (seat.flipped === true) return roleLabel(seat.role);           // 翻过牌的白痴：底牌当众亮过
     // 明牌局：出局就公开身份（流水里已经公告过，围观的人也看得到）
     if (revealModeOf(session) === 'open' && seat.alive === false) return roleLabel(seat.role);
     if (mine && mine.role === 'werewolf' && seat.role === 'werewolf') return roleLabel(seat.role); // 狼看同伴
@@ -852,8 +897,12 @@ function visibleRoleOf(app, session, seat) {
 function actingSeat(session) {
     if (session?.status !== 'ongoing') return null;
     if (session.phase === 'day_speak') return engine.currentSpeaker(session)?.seat ?? null;
+    if (session.phase === 'day_pk') return engine.currentPkSpeaker(session)?.seat ?? null;
     if (session.phase === 'day_vote') return engine.currentVoter(session)?.seat ?? null;
-    if (session.phase === 'hunter_shot') return session.pendingShot?.seat ?? null;
+    if (session.phase === 'day_pk_vote') return engine.currentPkVoter(session)?.seat ?? null;
+    // 出局的人走流程时高亮他：**谁出局是公开的**，看不出的是他到底有没有技能
+    if (session.phase === 'skill_wait') return engine.currentDeath(session)?.seat ?? null;
+    if (session.phase === 'last_words') return engine.currentLastWordSpeaker(session);
     return null;
 }
 
@@ -867,6 +916,8 @@ function turnHint(app, session) {
         case 'night_guard': return myNightDuty(app, session) === 'guard' ? '轮到你守人' : '守卫正在守人';
         case 'night_wolf': return myNightDuty(app, session) === 'wolf' ? '轮到你下刀（先跟队友商量）' : '狼队正在商量';
         case 'night_seer': return myNightDuty(app, session) === 'seer' ? '轮到你验人' : '预言家正在验人';
+        case 'night_witch': return myNightDuty(app, session) === 'witch' ? '轮到你用药' : '女巫正在用药';
+        case 'night_hunter': return myNightDuty(app, session) === 'hunter' ? '轮到你决定开不开枪' : '猎人正在行动';
         case 'night_resolve': return '等天亮';
         case 'dawn': return '天亮了';
         case 'day_speak': {
@@ -876,17 +927,41 @@ function turnHint(app, session) {
         case 'day_vote': {
             const seat = engine.currentVoter(session);
             const votes = session.votes || {};
-            const progress = `（${Object.keys(votes).length}/${engine.aliveSeats(session).length}）`;
+            // 分母是**有投票权的人**（活人减去翻过牌的白痴），不是活人数——不然进度条永远走不满
+            const progress = `（${Object.keys(votes).length}/${engine.votersOf(session).length}）`;
             // 票是静默的：投过之后流里看不到自己那一票，进度只能靠这里给
             if (!seat) return '等开票';
             if (isMine(seat)) return `轮到你投票${progress}`;
             if (mine && Object.prototype.hasOwnProperty.call(votes, mine.seat)) return `你已投票，等其他人${progress}`;
             return `轮到 ${at(seat)} 投票${progress}`;
         }
+        // PK 台上那一轮：台上的人挨个说一遍，说的还是同一个发言框
+        case 'day_pk': {
+            const seat = engine.currentPkSpeaker(session);
+            return seat ? (isMine(seat) ? '轮到你 PK 发言' : `轮到 ${at(seat)} PK 发言`) : '';
+        }
+        case 'day_pk_vote': {
+            const seat = engine.currentPkVoter(session);
+            const votes = session.pk?.votes || {};
+            const progress = `（${Object.keys(votes).length}/${engine.pkVotersOf(session).length}）`;
+            if (!seat) return '等开票';
+            if (isMine(seat)) return `轮到你补投${progress}`;
+            if (mine && Object.prototype.hasOwnProperty.call(votes, mine.seat)) return `你已投过，等其他人${progress}`;
+            return `轮到 ${at(seat)} 补投${progress}`;
+        }
         case 'day_verdict': return '等开票';
-        case 'hunter_shot': {
-            if (myNightDuty(app, session) === 'hunter') return '轮到你决定开不开枪';
-            return `${session.pendingShot ? at(session.pendingShot) : '猎人'} 要开枪`;
+        // 出局的人挨个走自己的流程（等待发动技能）。轮到谁就是谁，走完一个换下一个。
+        // 轮到自己时跟别处一样说「轮到你了」：所有人都是同一句，看不出这一拍里谁有技能要发动。
+        case 'skill_wait': {
+            const cur = engine.currentDeath(session);
+            if (!cur) return '';
+            const who = engine.seatAt(session, cur.seat);
+            return isMine(who) ? '轮到你了' : `轮到 ${at(who)}`;
+        }
+        // 遗言是同一个人的第二拍：谁出局是公开的，所以这一句可以点着名说
+        case 'last_words': {
+            const who = engine.seatAt(session, engine.currentLastWordSpeaker(session));
+            return isMine(who) ? '轮到你留遗言' : `轮到 ${at(who)} 留遗言`;
         }
         default: return '';
     }
@@ -913,6 +988,7 @@ function renderIdentityCard(app, session, mine) {
     const wolf = view.faction === 'wolf';
     const checks = view.checks || [];
     const guarded = view.guarded || [];
+    const witchLog = view.witchLog || [];
     return `
         <section class="ww-identity ${wolf ? 'wolf' : 'good'}">
             <div class="ww-identity-head">
@@ -928,6 +1004,16 @@ function renderIdentityCard(app, session, mine) {
                 const one = esc(`第 ${g.round} 夜 ${g.seat} 号 ${g.name}`);
                 return i === guarded.length - 1 ? `<em class="ww-check-latest">${one}</em>` : one;
             }).join('；')}</p>` : ''}
+            ${view.potions ? `<p>药：解药${view.potions.heal ? '还在' : '已用'}、毒药${view.potions.poison ? '还在' : '已用'}</p>` : ''}
+            ${witchLog.length ? `<p>夜里的记录：${witchLog.map((w, i) => {
+                // 解药用了之后法官就不再告诉她刀口了，那些夜只记她做了什么
+                const knife = w.told === false ? '没告诉你刀口'
+                    : (w.killed ? `${w.killed} 号 ${w.killedName}` : '没有人被刀');
+                const one = esc(`第 ${w.round} 夜 ${knife}`
+                    + `${w.saved ? '（你救了）' : ''}${w.poisoned ? `（你毒了 ${w.poisoned} 号 ${w.poisonedName}）` : ''}`);
+                return i === witchLog.length - 1 ? `<em class="ww-check-latest">${one}</em>` : one;
+            }).join('；')}</p>` : ''}
+            ${view.knifed ? '<p>你今晚被狼刀了，天亮就会出局。</p>' : ''}
         </section>
     `;
 }
@@ -950,7 +1036,7 @@ function renderTableSeat(app, session, seat, mine, over) {
             ${avatarHtml(seat.characterId, seat.name)}
             <span class="ww-seat-main">
                 <span class="ww-seat-name">${esc(seat.name || '')}${isMe ? '（你）' : ''}</span>
-                <span class="ww-seat-sub">${dead ? '已出局' : '存活'}${seat.kind === 'npc' ? ' · 路人' : ''}</span>
+                <span class="ww-seat-sub">${dead ? '已出局' : (seat.flipped === true ? '已翻牌 · 没有票' : '存活')}${seat.kind === 'npc' ? ' · 路人' : ''}</span>
                 ${tags ? `<span class="ww-seat-tags">${tags}</span>` : ''}
             </span>
         </button>
@@ -966,31 +1052,47 @@ function renderFeed(app, session, mine) {
     const isWolf = !!mine && mine.role === 'werewolf';
     const events = (session.events || []).filter(ev =>
         ev.isPublic !== false || (isWolf && ev.type === 'wolfchat'));
-    if (!events.length) return `<div class="ww-empty">还没发生什么</div>`;
-    return events.map(ev => {
-        if (ev.type === 'speak') {
+    const feed = !events.length ? `<div class="ww-empty">还没发生什么</div>` : events.map(ev => {
+        // 遗言与发言是同一段版式（都是「谁在说话」），只有一个小标记不同：
+        // 它是那个人的最后一段话，翻流水时得一眼看得出来
+        if (ev.type === 'speak' || ev.type === 'lastword') {
+            const words = ev.type === 'lastword';
             const seat = engine.seatAt(session, ev.seat);
             const body = String(ev.text || '').replace(/^\d+ 号 [^：]*：/, '');
             const isMine = !!mine && ev.seat === mine.seat;
             return `
-                <div class="ww-line ${isMine ? 'mine' : ''}">
+                <div class="ww-line ${isMine ? 'mine' : ''} ${words ? 'words' : ''}">
                     <div class="ww-line-head">
                         ${avatarHtml(seat?.characterId, seat?.name || '')}
                         <strong>${esc(`${ev.seat} 号 ${seat?.name || ''}`)}</strong>
+                        ${words ? '<span class="ww-pill muted">遗言</span>' : ''}
                         ${isMine ? '<span class="ww-dot"></span>' : ''}
                     </div>
                     <div class="ww-line-body">${esc(body)}</div>
                 </div>
             `;
         }
+        // 投票那条消息尾巴上多一个小圆点：点开可以花钻石看**投这一票的人**当时的心声
+        // （道具，用户 2026-09-13 定）。只在真有那一条心声时才画——没有的是主视角
+        // 自己手投的那票（他没打过 AI 调用）。**托管的那票照画**（用户当天定的）：
+        // 那一票是 AI 替他决定的，不摆出来他根本不知道 AI 给他写了什么心声。
+        if (ev.type === 'vote') {
+            const has = !!heartOf(session, ev.seat, ev.round);
+            return `<div class="ww-line system">${FEED_ICON.vote} ${esc(ev.text || '')}`
+                + (has ? `<button type="button" class="ww-heart-dot" title="看这一票的心声"`
+                    + ` aria-label="看这一票的心声" data-heart-seat="${ev.seat}"`
+                    + ` data-heart-round="${ev.round ?? ''}"></button>` : '')
+                + `</div>`;
+        }
         const night = ev.type === 'system' && /夜/.test(ev.text || '');
         const whisper = ev.isPublic === false;
         const icon = FEED_ICON[ev.type] || '';
         return `<div class="ww-line system ${night ? 'night' : ''} ${whisper ? 'whisper' : ''}">${icon ? `${icon} ` : ''}${esc(ev.text || '')}</div>`;
     }).join('');
+    return feed + renderReviewMessages(app, session, mine);
 }
 
-const FEED_ICON = { death: '⚰️', vote: '🗳️', tally: '📊', verdict: '⚖️', shot: '🔫', end: '🏁', wolfchat: '🐺' };
+const FEED_ICON = { death: '⚰️', vote: '🗳️', tally: '📊', verdict: '⚖️', shot: '🔫', flip: '🃏', end: '🏁', wolfchat: '🐺' };
 
 /** 结束（或流局）之后的那一小段结算：谁能赢、谁活到了最后 */
 function renderEnding(app, session, mine) {
@@ -1005,6 +1107,267 @@ function renderEnding(app, session, mine) {
         ${mineRow ? `<div class="ww-line ${mineRow.win ? 'mine' : ''}">你是 ${esc(roleLabel(mineRow.role))}（${esc(mineRow.faction === 'wolf' ? '狼人阵营' : '好人阵营')}），${esc(mineRow.alive ? '活到了最后' : '中途出局')}。</div>` : ''}
         ${rows.map(r => `<div class="ww-line">${esc(`${r.seat} 号 ${r.name} · ${roleLabel(r.role)} · ${r.faction === 'wolf' ? '狼人' : '好人'} · ${r.alive ? '活到最后' : '出局'}${r.characterId ? '' : '（路人）'}`)}</div>`).join('')}
     `;
+}
+
+/* ---------------- 赛后复盘（牌摊开之后的桌边群聊） ----------------
+ * 机制（用户 2026-09-13 定）：点名制——被 @ 到的角色才说话，不轮流、不自动。
+ *
+ * **冷却只管自动接话那一路**（用户 2026-09-13 后补的口径）：
+ *  · 自动接话**关**（默认）——能叫人的只有主视角自己，没有 AI 互相接话就没有失控的链，
+ *    于是**没有冷却**：点一次叫一次，冷启动立刻开口。
+ *  · 自动接话**开**——AI 点谁就能接着叫谁，链子会长。这里才用窗口把冷却期里重复点他的
+ *    那几次**并成一次调用**：不重置、不排队，话留在消息流里，攒到窗口尽头补一次，
+ *    那一次喂的是那一刻的场上全量信息，由他自己决定说什么、回谁。每座每 60s 至多一次调用。
+ * 两种状态下正在说的是本人时，新点名都不丢：关着 = 等这一段落地就接着说（`pending`），
+ * 开着 = 并进他的下一个窗口。
+ *
+ * 「停」和「退出房间」都掐掉所有还在计的窗口：不再触发任何新调用（成本由玩家在不在场决定）。
+ */
+
+const REVIEW_CD = 60000;
+
+/** 复盘消息流最多留多少条（一桌一局，够了） */
+const REVIEW_KEEP = 200;
+
+/** 复盘里主视角能不能说话：这一局真打完了，而且他在座上（旁观只能看） */
+function canReview(app, session) {
+    return !!session && session.status === 'ended' && !app.readonly && !!mySeatOf(app, session);
+}
+
+/** @ 到空白为止都高亮：不追求每个 @ 都解析成座位，视觉上那一段字是一个整体 */
+function highlightAt(text) {
+    return esc(String(text || '')).replace(/@[^\s@，。！？、,.!?：:；;]*/g, m => `<span class="ww-rv-at">${m}</span>`);
+}
+
+/** 复盘消息流：接在公开流水后面。
+ *  **CD 在后台走，界面上一笔都不画**（用户 2026-09-13：「cd 中不用明确显示」）——
+ *  能看见的停顿只有一个：调用已经发出、结果还没回来的那一段（`thinking`）。 */
+function renderReviewMessages(app, session, mine) {
+    const list = session.review || [];
+    const thinking = [...(app.review?.thinking || [])];
+    if (!list.length && !thinking.length) return '';
+    const nameOf = n => `${n} 号 ${engine.seatAt(session, n)?.name || ''}`;
+    return `
+        <div class="ww-review-title">—— 赛后复盘 ——</div>
+        <div class="ww-review">
+            ${list.map(m => {
+                const isMine = !!mine && m.seat === mine.seat;
+                return `
+                    <div class="ww-rv-line ${isMine ? 'mine' : ''}">
+                        <div class="ww-rv-head">${isMine ? '你' : esc(`${m.seat} 号 ${m.name}`)}</div>
+                        <div class="ww-rv-bubble">${highlightAt(m.text)}</div>
+                    </div>
+                `;
+            }).join('')}
+            ${thinking.map(n => `<div class="ww-rv-line thinking"><div class="ww-rv-bubble">${esc(nameOf(n))} 正在想…</div></div>`).join('')}
+        </div>
+    `;
+}
+
+/** 复盘期的底部：输入框（打 @ 弹人）+ 自动接话开关 + 发送；旁观与不在座上只给「回列表」 */
+function renderReviewComposer(app, session, mine) {
+    if (!canReview(app, session)) {
+        return `<footer class="ww-bottom"><button id="wwLeaveTable" class="primary">回房间列表</button></footer>`;
+    }
+    return `
+        <footer class="ww-bottom column">
+            <div id="wwMentionList" class="ww-mention-list"></div>
+            <div class="ww-hint">赛后桌边：@ 谁，谁就说（打 @ 弹出这桌的人）。</div>
+            <textarea id="wwReviewDraft" class="ww-input" placeholder="想听谁说话就 @ 他">${esc(app.review.draft || '')}</textarea>
+            <div class="ww-composer-row">
+                <button id="wwAutoReply" class="ghost ${session.autoReply ? 'on' : ''}">自动接话：${session.autoReply ? '开' : '关'}</button>
+                <button id="wwReviewSend" class="primary">发送</button>
+                <button id="wwLeaveTable" class="ghost">回列表</button>
+            </div>
+        </footer>
+    `;
+}
+
+/**
+ * 这一局结束之后的所有写入都走这条队列。**不能用 mutateSession**：它开头那道
+ * ACTIVE_STATUS 早退会把 ended 的局整个拒掉（结算钩子正靠它防重入）。
+ * 所以这里自己读-改-写；多个角色的 CD 可能同时到点，不串起来会互相覆盖。
+ */
+function queueSessionWrite(app, mutate) {
+    const sid = app.session?.id;
+    if (!sid) return Promise.resolve(null);
+    app.reviewChain = (app.reviewChain || Promise.resolve()).then(async () => {
+        const fresh = await store.getSession(sid);
+        if (!fresh) return null;
+        if (mutate(fresh) === false) return null;
+        const ok = await store.saveSession(fresh);
+        if (ok && app.session?.id === sid) app.session = fresh;
+        return ok ? fresh : null;
+    }).catch(e => {
+        console.warn('[werewolf] 复盘写入失败', e);
+        return null;
+    });
+    return app.reviewChain;
+}
+
+/** 往复盘里落一条。消息流本身封顶，免得一桌聊到天荒地老把存档撑大 */
+function pushReview(app, msg) {
+    return queueSessionWrite(app, s => {
+        s.review = [...(s.review || []), msg].slice(-REVIEW_KEEP);
+    });
+}
+
+/**
+ * 排一次「被点名」。冷却只属于自动接话：那条链是 AI 自己接的，得有个闸；
+ * 主视角手点出来的每一次 @ 都是一句话，不该被上一个 60s 挡住。
+ */
+function scheduleSummon(app, close, seatNo) {
+    const session = app.session;
+    if (!session || session.status !== 'ended') return;
+    if (app.review.timers.has(seatNo)) return;      // 已经在攒了，这一次并进去
+    if (!engine.seatAt(session, seatNo)) return;
+    // 主视角那一座不自动叫（用户 2026-09-13）：自动接话是角色之间的链，@ 到他头上不该由 AI 代言。
+    // 他被 @ 了会在气泡里看见，回不回是他自己的事。放在这个唯一入口上，以后谁再加路径都自动继承。
+    if (seatNo === mySeatOf(app, session)?.seat) return;
+    if (!session.autoReply) { fireReview(app, close, seatNo); return; }
+    const wait = (app.review.readyAt.get(seatNo) || 0) - Date.now();
+    if (wait <= 0) { fireReview(app, close, seatNo); return; }
+    armReview(app, close, seatNo, wait);
+}
+
+/** 排一个延时窗口 */
+function armReview(app, close, seatNo, delay) {
+    const timer = setTimeout(() => {
+        app.review.timers.delete(seatNo);
+        fireReview(app, close, seatNo);
+    }, Math.max(0, delay));
+    app.review.timers.set(seatNo, timer);
+}
+
+/** 真的开一次口：先把这个座位的下一个窗口定下来，再决定现在说不说 */
+function fireReview(app, close, seatNo) {
+    app.review.readyAt.set(seatNo, Date.now() + REVIEW_CD);
+    // 上一段还在说（窗口是它说话时被点起来的）：等它说完再说，别把点名丢了
+    if (app.review.thinking.has(seatNo)) {
+        // 自动接话关着：没有窗口可并，等这一段落地就接着说
+        if (app.session?.autoReply) armReview(app, close, seatNo, REVIEW_CD);
+        else app.review.pending.add(seatNo);
+        return;
+    }
+    runReviewSpeak(app, close, seatNo);
+}
+
+/** 这位座位的档案（知识块用）：真角色读 stats，路人读 npcs */
+function seatRecord(seat) {
+    if (!seat) return Promise.resolve(null);
+    return seat.kind === 'npc'
+        ? store.getNpc(seat.npcId).catch(() => null)
+        : store.getStat(seat.characterId).catch(() => null);
+}
+
+/** 一次调用 = 这位角色的一段复盘发言。降级（没 key / 超时）走模板台词，绝不让桌子卡住 */
+async function runReviewSpeak(app, close, seatNo) {
+    const session = app.session;
+    if (!session || session.status !== 'ended' || app.review.thinking.has(seatNo)) return;
+    const seat = engine.seatAt(session, seatNo);
+    if (!seat) return;
+
+    app.review.thinking.add(seatNo);
+    renderApp(app, close);
+    let res;
+    try {
+        const record = await seatRecord(seat);
+        res = await ai.reviewSpeak({ session, seatNo, type: getRoomType(session.typeId), record });
+    } catch (e) {
+        console.warn('[werewolf] 复盘调用失败', e);
+        res = { text: ai.fallbackReview(seatNo), mentions: [], degraded: true };
+    }
+    app.review.thinking.delete(seatNo);
+    // 说这段的时候又被点了一次（自动接话关着才会攒这个）：这段话落地后接着再说一轮。
+    // 先取走再用，保证一条点名只兑现一次调用。
+    const again = app.review.pending.delete(seatNo);
+
+    // 这一局可能已经被换掉 / 已经退出房间了：落库前再确认一次
+    if (app.session?.id !== session.id) { renderApp(app, close); return; }
+    await pushReview(app, {
+        seat: seatNo, name: seat.name, text: res.text,
+        t: Date.now(), mentions: res.mentions || [], degraded: !!res.degraded
+    });
+    // 自动接话：他点名了谁就接着叫谁（开关关着就到此为止）
+    if (app.session?.autoReply) {
+        for (const n of (res.mentions || [])) if (n !== seatNo) scheduleSummon(app, close, n);
+    }
+    renderApp(app, close);
+    if (again) fireReview(app, close, seatNo);
+}
+
+/** 主视角在复盘里说话：自己的先落，再给被点到的人排窗口（自己被 @ 不算） */
+async function sendReview(app, close) {
+    const session = app.session;
+    if (!canReview(app, session)) return;
+    const text = String(app.review.draft || '').trim();
+    if (!text) return;
+    const mine = mySeatOf(app, session);
+    const mentions = engine.parseMentions(text, session).filter(n => n !== mine.seat);
+    app.review.draft = '';
+    app.review.picker = null;
+    await pushReview(app, { seat: mine.seat, name: mine.name, text, t: Date.now(), mentions });
+    renderApp(app, close);
+    for (const n of mentions) scheduleSummon(app, close, n);
+}
+
+/** 「自动接话」开关：AI 之间能不能自己接下去。默认关，直接写在这局的存档上 */
+async function toggleAutoReply(app, close) {
+    if (!app.session) return;
+    const next = !app.session.autoReply;
+    app.session.autoReply = next;                 // 先动内存：开关要有即时反馈
+    renderApp(app, close);
+    await queueSessionWrite(app, s => { s.autoReply = next; });
+}
+
+/** 停 / 退出：把还在计的窗口全掐掉——「给停或者退出房间都不再触发新的调用」 */
+function clearReviewTimers(app) {
+    for (const t of app.review.timers.values()) clearTimeout(t);
+    app.review.timers.clear();
+    app.review.readyAt.clear();   // 离开过再回来算冷启动：别让他还记得上一轮的冷却
+    app.review.thinking.clear();
+    app.review.pending.clear();
+    app.review.picker = null;
+    app.review.draft = '';
+}
+
+/** @ 候选浮层：只在光标前一段刚好是「@ + 无空白」时弹，点谁插谁 */
+function updateMentionList(app, root) {
+    const box = root.querySelector('#wwMentionList');
+    const ta = root.querySelector('#wwReviewDraft');
+    if (!box || !ta) return;
+    const session = app.session;
+    const mine = mySeatOf(app, session);
+    const before = String(ta.value || '').slice(0, ta.selectionStart);
+    const m = before.match(/@([^\s@]{0,12})$/);
+    if (!m || !session) { box.innerHTML = ''; box.classList.remove('open'); app.review.picker = null; return; }
+    const q = m[1];
+    const items = (session.seats || [])
+        .filter(s => s.seat !== mine?.seat)
+        .filter(s => !q || String(s.name || '').includes(q) || String(s.seat) === q);
+    if (!items.length) { box.innerHTML = ''; box.classList.remove('open'); app.review.picker = null; return; }
+    app.review.picker = { from: ta.selectionStart - m[0].length };
+    box.innerHTML = items.map(s => `<button class="ww-at-item" data-at="${s.seat}">${s.seat} 号 ${esc(s.name)}</button>`).join('');
+    box.classList.add('open');
+}
+
+/** 选中一个候选：把 @ 那一小段换成「@名字 」，光标落在后面（拿名字而不是号数，读着自然） */
+function insertMention(app, root, seatNo) {
+    const ta = root.querySelector('#wwReviewDraft');
+    const picker = app.review.picker;
+    const seat = engine.seatAt(app.session, seatNo);
+    if (!ta || !picker || !seat) return;
+    const value = String(ta.value || '');
+    // 名字里带空白就退回座号：@ 后面一遇空白就断，插了名字等于白点
+    const insert = /\s/.test(seat.name || '') ? `@${seat.seat}号 ` : `@${seat.name} `;
+    const next = value.slice(0, picker.from) + insert + value.slice(ta.selectionStart);
+    const pos = picker.from + insert.length;
+    app.review.draft = next;
+    ta.value = next;
+    ta.setSelectionRange(pos, pos);
+    ta.focus();
+    app.review.picker = null;
+    updateMentionList(app, root);
 }
 
 function renderTable(app) {
@@ -1027,7 +1390,7 @@ function renderTable(app) {
             <strong>场上</strong>
             <span>${esc(canMark ? `${note} · 点座位贴标记` : note)}</span>
         </div>
-        <div class="ww-seats compact">
+        <div class="ww-seats compact${tableColumnsOf(board) === 4 ? ' c4' : ''}">
             ${(session.seats || []).map(s => renderTableSeat(app, session, s, mine, over)).join('')}
         </div>
         ${over ? renderEnding(app, session, mine) : `<div class="ww-section-title"><strong>发言</strong><span>${esc('按座号挨个来')}</span></div>`}
@@ -1042,9 +1405,7 @@ function renderTableBottom(app) {
     if (!session) return '';
     const mine = mySeatOf(app, session);
 
-    if (isOver(session)) {
-        return `<footer class="ww-bottom"><button id="wwLeaveTable" class="primary">回房间列表</button></footer>`;
-    }
+    if (isOver(session)) return renderReviewComposer(app, session, mine);
     if (app.busy) {
         return `<footer class="ww-bottom"><button class="primary" disabled>⏳ 等 AI 回话…</button></footer>`;
     }
@@ -1053,10 +1414,15 @@ function renderTableBottom(app) {
     const duty = myNightDuty(app, session);
     if (duty) return renderNightAct(app, session, mine, duty);
 
-    const speaker = session.phase === 'day_speak' ? engine.currentSpeaker(session) : null;
-    const voter = session.phase === 'day_vote' ? engine.currentVoter(session) : null;
+    const speaker = (session.phase === 'day_speak' ? engine.currentSpeaker(session)
+        : session.phase === 'day_pk' ? engine.currentPkSpeaker(session) : null);
+    const voter = (session.phase === 'day_vote' ? engine.currentVoter(session)
+        : session.phase === 'day_pk_vote' ? engine.currentPkVoter(session) : null);
+    // 遗言那一拍：队列里当前那个人说最后一段话（用的是同一个发言框，只是提示与落点不同）
+    const mourner = session.phase === 'last_words' ? engine.currentDeath(session) : null;
     // 轮到我：发言框 / 投票点选；否则给出「让某位 AI 行动」那一个按钮
     if (speaker && mine && speaker.seat === mine.seat) return renderComposer(app, session);
+    if (mourner && mine && mourner.seat === mine.seat) return renderComposer(app, session, 'lastwords');
     if (voter && mine && voter.seat === mine.seat) return renderVoteRow(app, session, mine);
 
     const act = label => `<footer class="ww-bottom"><button id="wwAct" class="primary">${esc(label)}</button></footer>`;
@@ -1066,22 +1432,53 @@ function renderTableBottom(app) {
         case 'night_guard': return act('让守卫守护');
         case 'night_wolf': return act('让狼队行动');
         case 'night_seer': return act('让预言家验人');
+        case 'night_witch': return act('让女巫用药');
+        case 'night_hunter': return act('让猎人行动');
         case 'night_resolve': return advance('公布今晚的结果');
-        case 'dawn': return advance(`开始第 ${session.round || 1} 天`);
+        // 天亮了：昨夜有人出局的话，这一下先送他们挨个走完自己的流程（等待发动技能 → 遗言），
+        // 走完才轮到活人发言；平安夜就直接开始这一天。谁出局是公开的，按钮随它换个说法不泄漏什么
+        case 'dawn': return advance((session.deathQueue || []).length ? '继续' : `开始第 ${session.round || 1} 天`);
         case 'day_speak': return speaker ? act(`让 ${speaker.seat} 号 ${speaker.name} 发言`) : '';
         case 'day_vote': return voter ? act(`让 ${voter.seat} 号 ${voter.name} 投票`) : '';
+        // PK 两拍与白天那两拍是同一个手感：台上说话、台下补投，按钮文案照旧不点破谁在台上
+        case 'day_pk': return speaker ? act(`让 ${speaker.seat} 号 ${speaker.name} 发言`) : '';
+        case 'day_pk_vote': return voter ? act(`让 ${voter.seat} 号 ${voter.name} 投票`) : '';
         case 'day_verdict': return advance('开票');
-        case 'hunter_shot': {
-            const p = session.pendingShot;
-            return act(p ? `让 ${p.seat} 号 ${p.name} 开枪` : '让猎人开枪');
+        // 出局的人挨个走流程：走完一个换下一个。**按钮文案对每个人都一样**——
+        // 被票出局的猎人要在这里补一枪，但写成「让 X 号 开枪」就等于当众点破他是猎人。
+        case 'skill_wait': {
+            const cur = engine.currentDeath(session);
+            return cur?.act === 'shot' ? act('继续') : advance('继续');
+        }
+        // 遗言：轮到他就是他的最后一段话。谁出局是公开的，所以这儿点着名让他说没问题
+        case 'last_words': {
+            const cur = engine.currentDeath(session);
+            return cur ? act(`听 ${cur.seat} 号 ${engine.seatAt(session, cur.seat)?.name || ''} 的遗言`) : '';
         }
         default: return '';
     }
 }
 
-function renderComposer(app, session) {
+/**
+ * 轮到我说话的那一个框：白天发言与遗言共用（`mode` 只换提示与文案）。
+ * 遗言那一版把「代笔」说成「让 AI 替你写」——他已经出局了，没什么身份要藏。
+ */
+function renderComposer(app, session, mode = 'speak') {
     const limit = getRoomType(session.typeId)?.speechLimit || 120;
     const hasMarks = Object.keys(marksForPrompt(session.marks)).length > 0;
+    const mine = mySeatOf(app, session);
+    if (mode === 'lastwords') {
+        return `
+        <footer class="ww-bottom column">
+            <div class="ww-hint">这是你的遗言（${mine?.seat || ''} 号）：最后一段公开的话，说给活着的人听。</div>
+            <textarea id="wwDraft" class="ww-input" placeholder="你的遗言（不超过 ${limit} 字）">${esc(app.draft || '')}</textarea>
+            <div class="ww-composer-row">
+                <button id="wwGhost" class="ghost">代笔</button>
+                <button id="wwSend" class="primary">说完</button>
+            </div>
+        </footer>
+    `;
+    }
     return `
         <footer class="ww-bottom column">
             <div class="ww-hint">轮到你了：自己打，或者让 AI 顺着你的草稿${hasMarks ? '与标记' : ''}代笔。</div>
@@ -1100,10 +1497,14 @@ function renderDelegate(kind) {
 }
 
 function renderVoteRow(app, session, mine) {
-    const targets = engine.aliveSeats(session).filter(s => s.seat !== mine.seat);
+    // PK 台下补投那一轮只能投台上的人；其余时候照旧（同一份合法集：翻过牌的白痴也不在芯片上）
+    const pk = session.phase === 'day_pk_vote';
+    const targets = pk ? engine.pkVoteTargets(session) : engine.voteTargets(session, mine.seat);
     return `
         <footer class="ww-bottom column">
-            <div class="ww-hint">轮到你投票了：点一个人投他出局，或者弃票。</div>
+            <div class="ww-hint">${pk
+                ? '轮到你补投了：在他们几位中间点一个（也可以弃票）。'
+                : '轮到你投票了：点一个人投他出局，或者弃票。'}</div>
             <div class="ww-vote-row">
                 ${targets.map(t => `<button class="ww-mark-chip" data-vote="${t.seat}">${t.seat} 号 ${esc(t.name)}</button>`).join('')}
                 <button class="ww-mark-chip" data-vote="0">弃票</button>
@@ -1177,9 +1578,39 @@ function renderNightAct(app, session, mine, kind) {
         `;
     }
 
+    // 女巫：两瓶药是两回事，分两排点；「不用药」也得点一下——不点这一步就推不走，全场都在等她
+    if (kind === 'witch') {
+        const view = engine.viewOf(session, mine.seat) || {};
+        const heal = engine.witchTargets(session, mine.seat, 'heal');
+        const poison = engine.witchTargets(session, mine.seat, 'poison');
+        const pick = (target, label, act) =>
+            `<button class="ww-mark-chip" data-night="witch" data-act="${act}" data-target="${target}">${esc(label)}</button>`;
+        const stock = `解药${view.potions?.heal ? '还在' : '已用'}、毒药${view.potions?.poison ? '还在' : '已用'}；同一夜只能用一瓶，选了就收不回。`;
+        // 解药那一路点不动时写明是哪种「没有」：药已经用掉了、今晚压根没人被刀、还是刀在她自己身上
+        const healNote = !view.potions?.heal ? '解药：已经用掉了'
+            : (view.tonight?.seat === mine.seat ? '解药：救不了自己，过了首夜就不能自救' : '解药：今晚没有人被刀');
+        return `
+            <footer class="ww-bottom column">
+                <div class="ww-hint">今晚用药：解药只能救今晚被刀的人，毒药能毒场上任意一人（不能毒自己）。${stock}</div>
+                <div class="ww-vote-row">
+                    ${heal.length
+                        ? heal.map(t => pick(t, `救 ${nameOf(t)}`, 'heal')).join('')
+                        : `<span class="ww-hint">${healNote}</span>`}
+                    ${pick('', '不用药', 'none')}
+                </div>
+                ${poison.length ? `<div class="ww-vote-row">${poison.map(t => pick(t, `毒 ${nameOf(t)}`, 'poison')).join('')}</div>` : ''}
+                ${renderDelegate('witch')}
+            </footer>
+        `;
+    }
+
+    // 猎人：开枪的决策只有一次，但**说法的来路不同**——夜里被刀（法官叫醒他）与白天被票出局（他刚知道自己出局）
+    const knifed = session.phase === 'night_hunter';
     return `
         <footer class="ww-bottom column">
-            <div class="ww-hint">你出局了：可以带走一个人，也可以弃枪。</div>
+            <div class="ww-hint">${knifed
+                ? '你今晚被狼刀了：可以带走场上一个人，也可以弃枪。你的死讯天亮公布，那时才轮到你说遗言。'
+                : '你被投票出局了：可以带走场上一个人，也可以弃枪。'}</div>
             <div class="ww-vote-row">
                 ${targets.map(t => chip(t, nameOf(t), false)).join('')}
                 ${chip(0, '弃枪', false)}
@@ -1226,15 +1657,42 @@ async function runTurn(app, close, { call, apply }) {
     return { res, ...out };
 }
 
-/** 发言：一次调用换一段话；AI 顺手贴的判断只回灌它自己 */
+/** 发言：一次调用换一段话（PK 台上那一轮走的是同一个入口，落点换成 applyPkSpeech） */
 function speakTurn(app, close, seatNo, type) {
     return runTurn(app, close, {
         call: s => ai.speakCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
             ai.mergeLabels(s, seatNo, res?.marks || {});
             engine.addNote(s,seatNo, { kind: 'speak', text: res?.note });
-            return engine.applySpeech(s, seatNo, res?.text || ai.fallbackSpeech(seatNo));
+            // 关注表：这次改了就换，没写就维持（res.watch 是 undefined，不是空数组）
+            if (res?.watch) engine.setWatch(s, seatNo, res.watch);
+            const text = res?.text || ai.fallbackSpeech(seatNo);
+            return s.phase === 'day_pk' ? engine.applyPkSpeech(s, seatNo, text) : engine.applySpeech(s, seatNo, text);
         }
+    });
+}
+
+/**
+ * 遗言：一次调用换最后一段话，落点是 `applyLastWords`（不是普通发言）。
+ *
+ * **先看有没有现成的**：夜里被刀的猎人早在「猎人」那一拍就顺手写好了白天要说的那段
+ * （`session.wordsDraft`，见 applyNightDecision）。公布死讯、轮到他时直接取用，不再打一次调用
+ * ——按次数计费，能省一次是一次。取用发生在写库那一趟里（`takeWordsDraft` 顺手清掉，
+ * 免得他下辈子还用这段）。
+ *
+ * AI 没回话就用模板台词顶上：遗言这一拍**不能卡住**，卡住的不是一个人，是整局。
+ * 死人不再改表：这一段只写正文，不合并判断、不记笔记、不动关注表。
+ */
+function lastWordsTurn(app, close, seatNo, type) {
+    const ready = (app.session?.wordsDraft || {})[seatNo] || '';
+    if (ready) {
+        return mutateSession(app, app.session.id, s =>
+            engine.applyLastWords(s, seatNo, engine.takeWordsDraft(s, seatNo) || ready))
+            .then(() => renderApp(app, close));
+    }
+    return runTurn(app, close, {
+        call: s => ai.lastWords({ session: s, seatNo, type }),
+        apply: (s, res) => engine.applyLastWords(s, seatNo, res?.text || ai.fallbackSpeech(seatNo))
     });
 }
 
@@ -1244,12 +1702,21 @@ function voteTurn(app, close, seatNo, type) {
         apply: (s, res) => {
             ai.mergeLabels(s, seatNo, res?.marks || {});
             engine.addNote(s,seatNo, { kind: 'vote', text: res?.note });
-            return engine.applyVote(s, seatNo, res?.vote ?? null);
+            // 心声：这一票的副产物，只写不读（留给以后的道具，用户 2026-09-13 定）。
+            // 主视角把这一票交给 AI 时走的是同一个入口，同样记上；kind 跟「代笔」那一路一致
+            engine.addHeart(s, seatNo, {
+                kind: seatNo === mySeatOf(app, s)?.seat ? 'ghost' : 'vote',
+                text: res?.heart
+            });
+            if (res?.watch) engine.setWatch(s, seatNo, res.watch);   // 投票时再决定一次关注
+            // PK 台下补投的那一轮走同一个入口：合法集在 AI 层就换成了台上那几位
+            const target = res?.vote ?? null;
+            return s.phase === 'day_pk_vote' ? engine.applyPkVote(s, seatNo, target) : engine.applyVote(s, seatNo, target);
         }
     });
 }
 
-/** 狼队夜里走 wolfPackTurn（一次调用扮演全队）；这里只管 seer / guard / hunter 这三个单座位决策 */
+/** 狼队夜里走 wolfPackTurn（一次调用扮演全队）；这里只管 seer / guard / witch / hunter 这几个单座位决策 */
 function nightTurn(app, close, kind) {
     if (kind === 'wolf') return packTurn(app, close, { player: null });
     return runTurn(app, close, {
@@ -1257,7 +1724,7 @@ function nightTurn(app, close, kind) {
         apply: (s, res) => {
             // 笔记先记（此时阶段还没推走，defaultActor 拿到的就是刚刚行动的那个人）
             engine.addNote(s, ai.defaultActor(s, kind), { kind, text: res?.note });
-            return applyNightDecision(s, kind, res?.target ?? null);
+            return applyNightDecision(s, kind, res || {});
         }
     });
 }
@@ -1308,15 +1775,38 @@ function applyWolfPack(s, res, player) {
  * 夜晚决策落库：模型给的目标不合法就退到模板目标；一个合法目标都没有（规则上不该出现）
  * 也把阶段推过去——玩家不该卡在一个点不动的夜里。
  */
-function applyNightDecision(s, kind, target) {
+function applyNightDecision(s, kind, res) {
     const who = ai.defaultActor(s, kind);
     const legal = ai.nightTargets(s, kind, who);
+    const target = res?.target ?? null;
     const pick = legal.includes(target) ? target : (ai.templateNightTarget(s, kind, who) ?? null);
-    if (kind === 'wolf') return engine.applyWolfKill(s, pick) || skipNight(s, 'night_resolve');
-    if (kind === 'seer') return engine.applySeerCheck(s, who, pick) || skipNight(s, 'night_resolve');
-    // 守卫推的是 night_wolf（他后面才是狼），别推 night_resolve——那会把狼的一夜跳过去
-    if (kind === 'guard') return engine.applyGuard(s, who, pick) || skipNight(s, 'night_wolf');
+    // 落空时推到**夜里的下一步**（顺序问引擎要，别在这里另抄一份）
+    if (kind === 'wolf') return engine.applyWolfKill(s, pick) || skipNight(s, engine.nextNightPhase(s, 'night_wolf'));
+    if (kind === 'seer') return engine.applySeerCheck(s, who, pick) || skipNight(s, engine.nextNightPhase(s, 'night_seer'));
+    // 守卫推的是他后面那一步（默认序里是狼），别推成结算——那会把后面的一夜整段跳过去
+    if (kind === 'guard') return engine.applyGuard(s, who, pick) || skipNight(s, engine.nextNightPhase(s, 'night_guard'));
+    if (kind === 'witch') return engine.applyWitch(s, who, witchPlanOf(s, who, res))
+        || skipNight(s, engine.nextNightPhase(s, 'night_witch'));
+    if (s.phase === 'night_hunter') {
+        // 被刀的那一夜：AI 顺手写好的遗言先收着（公布死讯、轮到他说话时直接取用，省一次调用）
+        const woken = engine.hunterWakesTonight(s) === who;
+        if (woken && res?.words) engine.setWordsDraft(s, who, res.words);
+        return engine.applyHunterNight(s, who, woken ? pick : null)
+            || skipNight(s, engine.nextNightPhase(s, 'night_hunter'));
+    }
+    // 白天补枪那一拍：他刚知道自己被票出局，这一枪只能在队列里开
     return engine.applyHunterShot(s, pick);
+}
+
+/**
+ * 女巫的用药计划。模型说的动作认不出、或者目标不在她那瓶药的合法集里，一律按「今晚不用药」
+ * ——宁可这一夜白过，也绝不替她乱开一瓶药（毒错了人是不可逆的）。
+ */
+function witchPlanOf(s, who, res) {
+    const target = res?.target ?? null;
+    if (res?.action === 'heal' && engine.witchTargets(s, who, 'heal').includes(target)) return { save: true };
+    if (res?.action === 'poison' && engine.witchTargets(s, who, 'poison').includes(target)) return { poison: target };
+    return {};
 }
 
 function skipNight(s, phase) {
@@ -1342,13 +1832,43 @@ async function runTableAction(app, close) {
         if (!engine.seatsOfRole(session, 'seer').some(s => s.alive !== false)) return runTableAdvance(app, close);
         return nightTurn(app, close, 'seer');
     }
-    if (session.phase === 'hunter_shot') return nightTurn(app, close, 'hunter');
+    if (session.phase === 'night_witch') {
+        // 同上：她不在世、药都用完了、或者今晚没有一步是她能走的，都不必白打一次 AI
+        const who = ai.defaultActor(session, 'witch');
+        if (!who || !ai.nightTargets(session, 'witch', who).length) return runTableAdvance(app, close);
+        return nightTurn(app, close, 'witch');
+    }
+    if (session.phase === 'night_hunter') {
+        // 猎人这一拍只有**真被刀的那个**才有决策；没被刀的夜里点一下就过去（文案照旧，看不出差别）
+        if (engine.hunterWakesTonight(session) == null) return runTableAdvance(app, close);
+        return nightTurn(app, close, 'hunter');
+    }
+    // 出局的人挨个走流程：轮到他补那一枪就让 AI 定，别人（只是走个过场）点一下就换下一个
+    if (session.phase === 'skill_wait') {
+        const cur = engine.currentDeath(session);
+        if (cur?.act !== 'shot') return runTableAdvance(app, close);
+        return nightTurn(app, close, 'hunter');
+    }
+    // 遗言那一拍（轮到我时底部是发言框，#wwAct 不渲染，走不到这儿）
+    if (session.phase === 'last_words') {
+        const seat = engine.currentLastWordSpeaker(session);
+        return seat != null ? lastWordsTurn(app, close, seat, type) : undefined;
+    }
     if (session.phase === 'day_speak') {
         const seat = engine.currentSpeaker(session);
         return seat ? speakTurn(app, close, seat.seat, type) : undefined;
     }
+    // PK 的两拍与白天的两拍共用同一对 turn：落点由 apply 里按阶段分流
+    if (session.phase === 'day_pk') {
+        const seat = engine.currentPkSpeaker(session);
+        return seat ? speakTurn(app, close, seat.seat, type) : undefined;
+    }
     if (session.phase === 'day_vote') {
         const seat = engine.currentVoter(session);
+        return seat ? voteTurn(app, close, seat.seat, type) : undefined;
+    }
+    if (session.phase === 'day_pk_vote') {
+        const seat = engine.currentPkVoter(session);
         return seat ? voteTurn(app, close, seat.seat, type) : undefined;
     }
 }
@@ -1364,40 +1884,50 @@ async function runTableAdvance(app, close) {
         // 守卫不在世时的 night_guard：阶段照走，点一下就过去（后面接的是狼，不是结算）
         if (phase === 'night_guard') {
             if (engine.hasLiveRole(s, 'guard')) return null;
-            s.phase = 'night_wolf';
+            s.phase = engine.nextNightPhase(s, 'night_guard');
             return true;
         }
         // 预言家不在世时的 night_seer：阶段照走，点一下就过去
         if (phase === 'night_seer') {
             if (engine.seatsOfRole(s, 'seer').some(x => x.alive !== false)) return null;
-            s.phase = 'night_resolve';
+            s.phase = engine.nextNightPhase(s, 'night_seer');
+            return true;
+        }
+        // 女巫不在世 / 药都用完了的 night_witch：同上
+        if (phase === 'night_witch') {
+            const who = ai.defaultActor(s, 'witch');
+            if (who && ai.nightTargets(s, 'witch', who).length) return null;
+            s.phase = engine.nextNightPhase(s, 'night_witch');
+            return true;
+        }
+        // 今晚没被刀的 night_hunter：他没有可决定的（枪只在被刀那一刻定），点一下就过去
+        if (phase === 'night_hunter') {
+            if (engine.hunterWakesTonight(s) != null) return null;
+            s.phase = engine.nextNightPhase(s, 'night_hunter');
             return true;
         }
         if (phase === 'dawn') return engine.startDay(s);
         if (phase === 'day_verdict') { engine.settleVote(s); return true; }
+        // 出局者的流程：换下一个（最后一个走完，这一批才真的散场——天亮，或者入夜）
+        if (phase === 'skill_wait') return engine.advanceDeathQueue(s);
         return null;
     });
     renderApp(app, close);
-
-    // 暗牌局：技能的决策并进这一拍——不停在「猎人开枪」阶段，免得阶段条与按钮把死者身份说破。
-    // 明牌局照旧分步。例外：死者就是玩家自己时必须停下来让他决定（这一步只有他自己看得见，
-    // 他本来就知道自己的底牌；不停下来他就永远没机会开枪）。
-    const now = app.session;
-    const mineNow = mySeatOf(app, now);
-    if (out && now && now.pendingShot && revealModeOf(now) !== 'open'
-        && now.pendingShot.seat !== mineNow?.seat) {
-        return nightTurn(app, close, 'hunter');
-    }
 }
 
-/** 玩家自己发言：手打，或者代笔之后发出去（这一步不打 AI） */
+/** 玩家自己发言：手打，或者代笔之后发出去（这一步不打 AI）；遗言那一拍走的是同一段话，落点不同 */
 async function sendMySpeech(app, close) {
     const session = app.session;
     const mine = mySeatOf(app, session);
     if (!session || !mine || app.busy) return;
+    const words = session.phase === 'last_words';
     const text = String(app.draft || '').trim();
-    if (!text) { toast(app, '先打两句，或者让 AI 代笔'); return; }
-    const ok = await mutateSession(app, session.id, s => engine.applySpeech(s, mine.seat, text));
+    if (!text) { toast(app, words ? '遗言总得写两句，或者让 AI 代笔' : '先打两句，或者让 AI 代笔'); return; }
+    // 三种落点：遗言 / PK 台上那一轮 / 普通白天发言——都是同一段话，去处不同
+    const ok = await mutateSession(app, session.id, s => (words
+        ? engine.applyLastWords(s, mine.seat, text)
+        : s.phase === 'day_pk' ? engine.applyPkSpeech(s, mine.seat, text)
+            : engine.applySpeech(s, mine.seat, text)));
     app.draft = '';
     renderApp(app, close);
     if (!ok) toast(app, '这一步没生效，再点一次试试');
@@ -1416,10 +1946,13 @@ async function ghostSpeak(app, close) {
     renderApp(app, close);
     let res = null;
     try {
-        res = await ai.ghostwrite({
-            session, seatNo: mine.seat, draft,
-            marks: marksForPrompt(session.marks), type
-        });
+        // 遗言那一拍走的是**另一套提示词**：他不用再装好人，可以摊牌、可以报验人
+        res = session.phase === 'last_words'
+            ? await ai.lastWords({ session, seatNo: mine.seat, type })
+            : await ai.ghostwrite({
+                session, seatNo: mine.seat, draft,
+                marks: marksForPrompt(session.marks), type
+            });
     } catch { res = null; }
     app.busy = false;
 
@@ -1442,7 +1975,10 @@ async function castMyVote(app, close, target) {
     const session = app.session;
     const mine = mySeatOf(app, session);
     if (!session || !mine || app.busy) return;
-    const ok = await mutateSession(app, session.id, s => engine.applyVote(s, mine.seat, target === 0 ? null : target));
+    const pick = target === 0 ? null : target;
+    const ok = await mutateSession(app, session.id, s => (s.phase === 'day_pk_vote'
+        ? engine.applyPkVote(s, mine.seat, pick)
+        : engine.applyVote(s, mine.seat, pick)));
     renderApp(app, close);
     if (!ok) toast(app, '这一票没记上，再点一次试试');
 }
@@ -1451,7 +1987,7 @@ async function castMyVote(app, close, target) {
  * 夜间选人条的点击总入口。
  * 「不是我的回合就静默返回」同时挡掉三种噪声：双击的第二下、别人已经推进过、托管之后残留的点击。
  */
-function onNightChip(app, close, kind, target) {
+function onNightChip(app, close, kind, target, act = '') {
     const session = app.session;
     const mine = mySeatOf(app, session);
     if (!session || !mine || app.busy) return;
@@ -1462,11 +1998,11 @@ function onNightChip(app, close, kind, target) {
         renderApp(app, close);
         return;
     }
-    return actMyNight(app, close, kind, target);
+    return actMyNight(app, close, kind, target, '', act);
 }
 
-/** 守卫守人 / 预言家验人 / 猎人开枪 / 独狼下刀：点一下就是决定，不打 AI */
-async function actMyNight(app, close, kind, target, note = '') {
+/** 守卫守人 / 预言家验人 / 女巫用药 / 猎人开枪 / 独狼下刀：点一下就是决定，不打 AI */
+async function actMyNight(app, close, kind, target, note = '', act = '') {
     const session = app.session;
     const mine = mySeatOf(app, session);
     if (!session || !mine || app.busy) return;
@@ -1481,6 +2017,14 @@ async function actMyNight(app, close, kind, target, note = '') {
         }
         if (kind === 'guard') return engine.applyGuard(s, mine.seat, target);
         if (kind === 'seer') return engine.applySeerCheck(s, mine.seat, target);
+        // 女巫：两排芯片靠 data-act 分开——一个座号分不出是救还是毒
+        if (kind === 'witch') {
+            const plan = act === 'heal' ? { save: true }
+                : (act === 'poison' ? { poison: target } : {});
+            return engine.applyWitch(s, mine.seat, plan);
+        }
+        // 猎人：夜里被刀那一拍交给引擎的夜间答复；白天补枪那一拍才是队列里的那一枪
+        if (s.phase === 'night_hunter') return engine.applyHunterNight(s, mine.seat, target === 0 ? null : target);
         return engine.applyHunterShot(s, target === 0 ? null : target);   // 0 = 弃枪
     });
     renderApp(app, close);
@@ -1498,6 +2042,15 @@ async function actMyNight(app, close, kind, target, note = '') {
         const seat = engine.seatAt(app.session, target);
         if (seat) toast(app, `你今晚守着 ${seat.seat} 号 ${seat.name}`);
     }
+    // 用药只有他自己看得见（流水里一个字都不写）；说给他自己听，不构成泄漏
+    if (kind === 'witch') {
+        const seat = engine.seatAt(app.session, target);
+        if (act === 'heal' && seat) toast(app, `你用了救药，救回 ${seat.seat} 号 ${seat.name}`);
+        else if (act === 'poison' && seat) toast(app, `你用了毒药，毒了 ${seat.seat} 号 ${seat.name}`);
+        else toast(app, '今晚不用药');
+    }
+    // 夜里那一拍点了之后死讯还没公布（结算时才连着他的枪一起报）；这里只跟他自己确认一声
+    if (kind === 'hunter' && before === 'night_hunter') toast(app, '记住了：你的这一枪跟你的死讯一起公布');
 }
 
 /**
@@ -1536,6 +2089,7 @@ function resetTransient(app) {
     app.draft = '';
     app.wolfPick = null;
     app.wolfNote = '';
+    clearReviewTimers(app);   // 换桌 / 离桌 = 退出这一场：还在等的窗口全掐掉
 }
 
 /** 离开牌桌（局还在原地：回列表能看到「回到牌桌」） */
@@ -1580,7 +2134,7 @@ function openMarkPanel(app, close, seatNo) {
             const row = mask.querySelector('#wwMarkRow');
             const paint = () => {
                 const cur = (app.session?.marks || {})[seatNo] || [];
-                row.innerHTML = MARK_TAGS.map(t => `
+                row.innerHTML = markTagsOf(session).map(t => `
                     <button class="ww-mark-chip ${cur.includes(t) ? 'active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>
                 `).join('');
                 row.querySelectorAll('.ww-mark-chip').forEach(btn => {
@@ -1603,12 +2157,67 @@ function openMarkPanel(app, close, seatNo) {
     });
 }
 
+/* ---------------- 心声（道具：花钻石看某一票当时没说出口的那句话） ----------------
+ * 写点在票投出去那一刻（voteTurn 的 apply 里 engine.addHeart），这里只管看。
+ * **今天读它的只有这一处，也不进任何人的提示词**——心声天然带身份，进别人的视角就是
+ * 给全场开上帝视角（见 werewolfEngine.js 顶部那条红线）。但它属于写出它的那个角色，
+ * 以后拿它给**它自己**用是另一回事——界线划在「谁看」，不是「永远不许读」。
+ */
+
+/** 某个座位在某一轮留下的心声；没有就空串（界面上就不画那个小圆点） */
+function heartOf(session, seatNo, round) {
+    const list = (session?.aiHearts || {})[seatNo] || [];
+    if (round == null) return list.slice(-1)[0]?.text || '';   // 老流水没有轮次：取最近一条
+    return list.find(h => h.round === round)?.text || '';
+}
+
+/** 点小圆点：先问要不要花钻石，确认了才扣钻、才给看 */
+async function openHeart(app, seatNo, round) {
+    const session = app.session;
+    const seat = engine.seatAt(session, seatNo);
+    const who = `${seatNo} 号 ${seat?.name || ''}`;
+    const text = heartOf(session, seatNo, round);
+    if (!text) return toast(app, '这一票没有留下心声');
+    // **没坐上这一桌的观战局照样能看**（用户 2026-09-13 定）：钻石扣的是「看的人」自己
+    // 那个角色的钱包，跟他坐没坐上这一桌无关。只有压根没有主视角角色时才没处扣。
+    if (!app.me) return toast(app, '还没有主视角角色，钻石没处扣');
+    const bal = store.coinsOf(await store.getStat(app.me));
+    if (bal < store.HEART_COST) {
+        return modal(app, {
+            title: '心声',
+            sub: `看一条心声要 ${store.HEART_COST} 钻石，你现在有 ${bal} 颗。`,
+            bodyHtml: '<div class="ww-heart-hint">钻石是每个角色自己的，赢一局进账。</div>'
+        });
+    }
+    modal(app, {
+        title: `${who}的心声`,
+        sub: `消耗 ${store.HEART_COST} 钻石查看 · 你现在有 ${bal} 颗`,
+        // 不写「谁谁看不到」（用户 2026-09-13 纠正）：这句只讲它是什么。事实上能进这一桌、
+        // 有钻石的人都能看任何人的心声——它不进的是**别人的视角**（见引擎 addHeart）。
+        bodyHtml: '<div class="ww-heart-hint">投那一票那一刻没说出口的一句话。</div>',
+        actions: [{
+            label: `花 ${store.HEART_COST} 钻石看`,
+            run: async () => {
+                const left = await store.spendCoins(app.me, store.HEART_COST);
+                if (left === null) return toast(app, '钻石不够了');
+                modal(app, {
+                    title: `${who}的心声`,
+                    sub: `花掉 ${store.HEART_COST} 钻石 · 还剩 ${left} 颗`,
+                    bodyHtml: `<div class="ww-heart-text">${esc(text)}</div>`
+                });
+            }
+        }]
+    });
+}
+
 /* ---------------- 事件绑定 ---------------- */
 
 function bindApp(app, close) {
     const root = app.root;
     root.querySelector('#wwBack')?.addEventListener('click', () => handleBack(app, close));
-    root.querySelector('#wwAbout')?.addEventListener('click', () => toast(app, '狼人杀 · 6 人标准板'));
+    // 板子不止一张了：说明里点一下就说清这一版有哪几张，别只报第一张
+    root.querySelector('#wwAbout')?.addEventListener('click',
+        () => toast(app, `狼人杀 · ${Object.values(BOARDS).map(b => b.label).join(' / ')}`));
     root.querySelector('#wwGiveUp')?.addEventListener('click', () => confirmGiveUp(app, close));
 
     root.querySelectorAll('.ww-tab').forEach(btn => {
@@ -1665,6 +2274,11 @@ function bindApp(app, close) {
     root.querySelectorAll('.ww-seat[data-mark]').forEach(btn => {
         btn.addEventListener('click', () => openMarkPanel(app, close, Number(btn.dataset.mark)));
     });
+    // 投票消息尾巴上的小圆点：花钻石看那一票的心声（老流水没有轮次 → 传 null 取最近一条）
+    root.querySelectorAll('.ww-heart-dot').forEach(btn => {
+        btn.addEventListener('click', () => openHeart(app, Number(btn.dataset.heartSeat),
+            btn.dataset.heartRound ? Number(btn.dataset.heartRound) : null));
+    });
     root.querySelector('#wwAct')?.addEventListener('click', () => runTableAction(app, close));
     root.querySelector('#wwAdvance')?.addEventListener('click', () => runTableAdvance(app, close));
     root.querySelector('#wwSend')?.addEventListener('click', () => sendMySpeech(app, close));
@@ -1675,30 +2289,56 @@ function bindApp(app, close) {
         btn.addEventListener('click', () => castMyVote(app, close, Number(btn.dataset.vote)));
     });
     root.querySelectorAll('.ww-mark-chip[data-night]').forEach(btn => {
-        btn.addEventListener('click', () => onNightChip(app, close, btn.dataset.night, Number(btn.dataset.target)));
+        // data-act 是女巫那两排药用的（救/毒/不用，一个座号分不出是哪种）；没有它的芯片走原路
+        const target = btn.dataset.target ? Number(btn.dataset.target) : null;
+        btn.addEventListener('click', () => onNightChip(app, close, btn.dataset.night, target, btn.dataset.act || ''));
     });
     root.querySelector('#wwNote')?.addEventListener('input', e => { app.wolfNote = e.target.value; });
     root.querySelector('#wwSubmit')?.addEventListener('click', () => submitWolfPlan(app, close, { pick: app.wolfPick, note: app.wolfNote }));
     root.querySelector('#wwDelegate')?.addEventListener('click', e => delegateMyTurn(app, close, e.currentTarget.dataset.delegate));
+
+    // 赛后复盘
+    root.querySelector('#wwReviewSend')?.addEventListener('click', () => sendReview(app, close));
+    root.querySelector('#wwAutoReply')?.addEventListener('click', () => toggleAutoReply(app, close));
+    const reviewDraft = root.querySelector('#wwReviewDraft');
+    if (reviewDraft) {
+        // 不整块重渲染（会丢焦点与光标），就地更新草稿与候选浮层
+        const sync = () => { app.review.draft = reviewDraft.value; updateMentionList(app, root); };
+        reviewDraft.addEventListener('input', sync);
+        reviewDraft.addEventListener('click', sync);
+        reviewDraft.addEventListener('keyup', sync);
+    }
+    // 委托在浮层上，不在候选按钮上：候选是输入时按需 innerHTML 生成的，
+    // 渲染那一刻一个都还不存在，直接挂按钮等于挂给空气。
+    // mousedown 而不是 click：textarea 先失焦会把浮层关掉，click 就点不着了。
+    root.querySelector('#wwMentionList')?.addEventListener('mousedown', e => {
+        const item = e.target?.closest?.('.ww-at-item[data-at]');
+        if (!item) return;
+        e.preventDefault();
+        insertMention(app, root, Number(item.dataset.at));
+    });
 }
 
-/** 进已有的桌：准备中 → 准备页；已开局 → 牌桌（参与）或旁观页 */
+/** 进已有的桌：准备中 → 准备页；已开局 → 牌桌（参与）或旁观页；打完的 → 同一张桌上复盘 */
 async function enterTable(app, close, sessionId) {
-    const existing = (app.typeTables && Object.values(app.typeTables).flat())
-        ? Object.values(app.typeTables).flat().find(s => s.id === sessionId)
-        : null;
+    const inTypes = app.typeTables ? Object.values(app.typeTables).flat() : [];
+    // 打完的桌已经不在活动列表里了，从「最近结束」里捞
+    const existing = inTypes.find(s => s.id === sessionId)
+        || (app.recentEnded || []).find(s => s.id === sessionId);
     if (!existing) { toast(app, '这一桌不在了'); return; }
     app.session = existing;
     app.readonly = !iAmIn(existing, app);
     resetTransient(app);
+    // 记住是从哪一页点进来的：首页那列「最近结束」不挂在房型页上，退出去得还回首页
+    const from = app.page?.name || null;
 
     if (existing.status === 'forming') {
-        app.page = { name: 'room', typeId: existing.typeId, sessionId: existing.id };
+        app.page = { name: 'room', typeId: existing.typeId, sessionId: existing.id, from };
         // 重进桌：把没有对应在飞邀请的预留放掉
         const freed = await mutateSession(app, existing.id, s => releaseOrphanReservations(app, s));
         if (freed) await refreshTables(app);
     } else {
-        app.page = { name: app.readonly ? 'spectate' : 'table', typeId: existing.typeId, sessionId: existing.id };
+        app.page = { name: app.readonly ? 'spectate' : 'table', typeId: existing.typeId, sessionId: existing.id, from };
         // 中途退出去过又回来：先把库里这一局的最新状态读回来（阶段、票、发言都在库里）
         app.session = (await store.getSession(existing.id)) || existing;
     }

@@ -3,7 +3,13 @@
 
 /* ---------------- 角色 ---------------- */
 
-/* desc 是角色卡上的一句话；night 是规则页「一夜之间」那一段的一行（按板上实际有谁生成）。 */
+/*
+ * desc 是角色卡上的一句话；night 是规则页「一夜之间」那一段的一行（按板上实际有谁生成）。
+ *
+ * side 是「屠边」用的那一类：god 神职 / folk 平民（狼看 faction，不写 side）。
+ * 它与 faction 是两个轴：faction 管胜负归属（好人 / 狼人），side 只管屠边数哪一边。
+ * **不写 side 的角色在屠边里不算任何一边**（sideOf 返回 null）——宁可少数，不可默认成某一类。
+ */
 export const ROLE_META = {
     werewolf: {
         id: 'werewolf', label: '狼人', icon: '🐺', faction: 'wolf',
@@ -11,22 +17,32 @@ export const ROLE_META = {
         night: '狼人：和同伴各自提一个要刀的人；说的不一样就随机取一个'
     },
     seer: {
-        id: 'seer', label: '预言家', icon: '🔮', faction: 'good',
+        id: 'seer', label: '预言家', icon: '🔮', faction: 'good', side: 'god',
         desc: '每晚查验一人，得知对方是好人还是狼人。',
         night: '预言家：查验一人，得知其是好人还是狼人'
     },
+    witch: {
+        id: 'witch', label: '女巫', icon: '🧪', faction: 'good', side: 'god',
+        desc: '解药与毒药各一瓶，各只能用一次；解药还在时每夜会知道谁被刀，同一夜只能开一瓶，不能毒自己。',
+        night: '女巫：一瓶解药一瓶毒药，各只能用一次；解药还在时每夜会被告知谁被刀（解药一用掉就不再告知），同一夜只能开一瓶，首夜能救自己、之后不能自救，不能毒自己'
+    },
     guard: {
-        id: 'guard', label: '守卫', icon: '🛡️', faction: 'good',
+        id: 'guard', label: '守卫', icon: '🛡️', faction: 'good', side: 'god',
         desc: '每晚守护一人，被守护的人当夜不会被刀；不能连续两夜守同一人。',
         night: '守卫：每晚守护一人，他当夜不会被刀；不能连续两夜守同一个人，可以守自己'
     },
     hunter: {
-        id: 'hunter', label: '猎人', icon: '🔫', faction: 'good',
-        desc: '出局时可以开枪带走场上一人（被刀或被票都能开枪）。',
-        night: '猎人：夜里没有行动，但出局时能开枪带走一人'
+        id: 'hunter', label: '猎人', icon: '🔫', faction: 'good', side: 'god',
+        desc: '出局时可以开枪带走场上一人（被刀或被票都能开枪；被毒死不能开枪）。',
+        night: '猎人：夜里被狼刀到时会被单独叫醒，知道自己被刀了并当场决定开不开枪（被毒死不能开枪）'
+    },
+    idiot: {
+        id: 'idiot', label: '白痴', icon: '🃏', faction: 'good', side: 'god',
+        desc: '被投票出局时翻牌免死，此后失去投票权、不再被放逐，但夜里仍会被狼杀死。',
+        night: '白痴：夜里没有行动；白天被投票出局时翻牌免死，之后没有投票权、也不能再被投票放逐'
     },
     villager: {
-        id: 'villager', label: '村民', icon: '🌾', faction: 'good',
+        id: 'villager', label: '村民', icon: '🌾', faction: 'good', side: 'folk',
         desc: '没有夜间能力，靠推理与投票找出狼人。',
         night: '村民：夜里没有行动，靠白天的发言与投票找狼'
     }
@@ -40,22 +56,71 @@ export function factionOf(roleId) {
     return ROLE_META[roleId]?.faction || 'good';
 }
 
+/** 屠边数哪一边：'god' | 'folk'；狼与认不出的角色都返回 null（不硬凑成某一类） */
+export function sideOf(roleId) {
+    return ROLE_META[roleId]?.side || null;
+}
+
+export const SIDE_LABEL = { god: '神职', folk: '平民' };
+
 /* ---------------- 板子 ---------------- */
 
+/*
+ * 板子 = 阵容 + 这一桌的规矩。规矩字段全部**可省**，省了就是 6 人板如今的行为——
+ * 老 session 与老板子因此一个字都不用改（读侧一律走下面那几个兜底函数）。
+ *   winMode      'city' 屠城（狼数追平好人）｜'side' 屠边（神职或平民清空）
+ *   lastWords    出局留遗言（第一夜死者 + 白天被投出者）
+ *   pk           平票进 PK 再投一轮
+ *   sheriff      有警长（警徽流、警上警下那一套）。**不写 = 规则上不设警长**，今天两张板子都不设
+ *   tableColumns 局内座位网格列数（准备页用 columns）
+ *   callBudget   一局内的 AI 调用上限（不写走 werewolfAI 的 CALL_BUDGET）
+ *   nightOrder   夜里依次走哪几步（不写走引擎的默认序，那正好就是 6 人板今天的流程）
+ */
 export const BOARDS = {
     board6_standard: {
         id: 'board6_standard',
         label: '6 人标准板',
         seats: 6,
-        // 座位网格：6 人局只出左列 6 席（右列为以后 12 人房预留）
+        // 座位网格：6 人局只出左列 6 席（右列为 12 人房用）
         columns: 1,
+        tableColumns: 3,
+        winMode: 'city',
         roles: { werewolf: 2, seer: 1, guard: 1, villager: 2 }
+    },
+    board12_standard: {
+        id: 'board12_standard',
+        label: '12 人标准板',
+        seats: 12,
+        columns: 2,          // 准备页：2 列 × 6 行（座位卡带名字与按钮，两列更好点）
+        tableColumns: 4,     // 局内：4 列 × 3 行（紧凑卡，正好一屏）
+        winMode: 'side',     // 屠边：神职全灭或平民全灭，狼人赢
+        lastWords: true,
+        pk: true,
+        // 预算这件事先放一放（2026-09-13）：板子暂不下发 callBudget，整局不封顶。
+        // 想收回来就在这儿加一行 `callBudget: 150`（12 人局夜里 3 步 + 白天 2×存活人数，一局约 100 次）。
+        // 夜里：狼刀 → 女巫（要先看到刀口才决定救不救）→ 预言家 → 猎人（每夜都叫到他；
+        // 被刀会死的那个才被告知并决定开不开枪）。这一桌没有守卫，所以没有守人那一步。
+        nightOrder: ['night_wolf', 'night_witch', 'night_seer', 'night_hunter'],
+        roles: { werewolf: 4, seer: 1, witch: 1, hunter: 1, idiot: 1, villager: 4 }
     }
 };
 
 export function getBoard(boardId) {
     return BOARDS[boardId] || BOARDS.board6_standard;
 }
+
+/* 规矩字段的读侧兜底：默认值 = 6 人板现状，所以没写的板子行为不变。 */
+export function winModeOf(board) { return board?.winMode || 'city'; }
+export function wordsEnabled(board) { return board?.lastWords === true; }
+export function pkEnabled(board) { return board?.pk === true; }
+export function tableColumnsOf(board) { return board?.tableColumns || 3; }
+
+/**
+ * 这一桌有没有警长。**今天一律不设**（警长另做），但写成板子属性而不是全局事实：
+ * 规则页要按它出文案，AI 提示词要按它压住模型的先验——「12 人局」这四个字本身
+ * 会让模型自动聊起警徽流（用户 2026-09-13 实测就是这么冒出来的）。
+ */
+export function sheriffOf(board) { return board?.sheriff === true; }
 
 /** 板上有谁：`狼人×2 · 预言家×1 …`（规则页用）。换板子只改 BOARDS.roles，别处不用动。 */
 export function boardCounts(boardId) {
@@ -107,6 +172,18 @@ export const ROOM_TYPES = [
         pace: 900,
         tone: '放开了演，按你自己的身份与性格说话，可以带情绪与故事',
         reveal: 'hidden'
+    },
+    {
+        typeId: 'standard12',
+        name: '12 人标准局',
+        icon: '🌕',
+        boardId: 'board12_standard',
+        desc: '标准预女猎白：4 狼对 4 神 4 民，屠边胜负，出局有遗言，平票进 PK',
+        speechLimit: 160,
+        pace: 900,
+        tone: '这是正经的一局：人多、信息杂，盘逻辑、算票型、盯发言，别急着下结论',
+        // 暗牌：12 人局里明牌屠边会让狼直接按身份刀神，屠神几乎送分
+        reveal: 'hidden'
     }
 ];
 
@@ -129,7 +206,16 @@ export function revealLabel(mode) {
 
 /* ---------------- 主视角预设标签 ---------------- */
 
-export const MARK_TAGS = ['好人', '狼人', '预言家', '守卫', '村民', '存疑'];
+/*
+ * 预设标签**跟着房间类型走**：只有这一桌真会出现的身份（板子阵容决定）+ 两个通用标签。
+ * 6 人局因此不会冒出女巫/白痴这些这一桌根本没有的身份；换了板子，标签自己跟着换。
+ * 顺序 = 好人、[板上角色按 ROLE_META 的先后]、存疑。
+ */
+export function markTagsOf(session) {
+    const board = getBoard(session?.boardId);
+    const roles = Object.keys(ROLE_META).filter(id => board.roles[id]);
+    return ['好人', ...roles.map(roleLabel), '存疑'];
+}
 
 /* ---------------- 规则页文案 ---------------- */
 
@@ -140,6 +226,8 @@ export function buildRulesPage(type) {
     const nightLines = Object.keys(board.roles)
         .map(id => ROLE_META[id]?.night)
         .filter(Boolean);
+    // 屠边那一行要把这一桌上的神职点名说出来，别让玩家自己猜谁算「神」
+    const gods = Object.keys(board.roles).filter(id => sideOf(id) === 'god').map(id => roleLabel(id));
 
     return [
         {
@@ -147,21 +235,31 @@ export function buildRulesPage(type) {
             lines: [
                 `${board.label}：${counts}`,
                 `座位 ${board.seats} 席，你的角色由发牌随机决定`,
-                '狼人全灭 → 好人赢；狼人数量追平好人 → 狼人赢'
-            ]
+                winModeOf(board) === 'side'
+                    ? '狼人全灭 → 好人赢；神职全灭（屠神）或平民全灭（屠民）→ 狼人赢'
+                    : '狼人全灭 → 好人赢；狼人数量追平好人 → 狼人赢',
+                winModeOf(board) === 'side' && gods.length ? `这一桌的神职：${gods.join('、')}` : '',
+                // 不设警长要明写：模型自己会聊警徽流（用户实测），玩家听见了也会以为规则里有，
+                // 与其让他去猜「这局有没有警长」，不如在规则页上先讲清楚。
+                // 措辞用「不设」而不是「没有」：这是规则设定，不是缺了什么（用户 2026-09-13 定）。
+                sheriffOf(board) ? '' : '这一桌规则上不设警长，也没有警徽流'
+            ].filter(Boolean)
         },
         {
             title: '一夜之间',
             lines: [
                 ...nightLines,
-                '天亮公布死讯；若当夜无人出局则为平安夜'
+                '天亮了当场公布死讯；当夜无人出局就是平安夜'
             ]
         },
         {
             title: '一个白天',
             lines: [
                 '依次发言：每个人说一段自己的判断',
-                '全员投票：投完统一开票，票数最高者出局（平票则本轮无人出局）',
+                pkEnabled(board)
+                    ? '全员投票：投完统一开票，票数最高者出局；平票的几人上台 PK 再投一轮——'
+                        + '台上的人这一轮不投票，台下的人只能投台上的人或弃票，再平票则本轮无人出局'
+                    : '全员投票：投完统一开票，票数最高者出局（平票则本轮无人出局）',
                 board.roles.hunter ? '猎人出局可以开枪；之后进入下一夜' : '之后进入下一夜'
             ]
         },
@@ -172,9 +270,22 @@ export function buildRulesPage(type) {
                     ? '明牌局：有人出局会当场公开他的身份，技能由谁发动也一并写明'
                     : '暗牌局：出局不公开身份；技能没发动就什么都不写，发动了也只写谁发动技能、谁出局',
                 '投票是投完统一开票：投票过程中谁也看不到别人的票，开票时一起亮出来',
+                // 「遗言也接在同一个人后面」只在这张板子真有遗言时才写：6 人板提了就是误导
+                (wordsEnabled(board)
+                    ? '有人出局之后，出局的人会按座号挨个走一遍自己的流程（阶段条上的「等待发动技能」，遗言也接在同一个人后面）；'
+                    : '有人出局之后，出局的人会按座号挨个走一遍自己的流程（阶段条上的「等待发动技能」）；')
+                    + '谁出局是公开的，每个人在流程里到底做了什么才看不出来',
+                // 天亮 → 死讯 → 死者的流程 → 白天发言：次序写在规则里，别让玩家自己猜（2026-09-13 定）
+                '天亮了先公布昨夜谁出局（没人出局就是平安夜），出局的人走完自己的流程，才轮到白天发言',
                 '身份只有自己知道：每个角色只掌握自己的身份与夜里看到的信息',
                 board.roles.guard
                     ? '守卫守中当晚的刀口就是平安夜；平安夜也可能只是狼没下刀，两者看起来一样'
+                    : '',
+                board.roles.witch && board.roles.hunter
+                    ? '猎人被女巫毒死不能开枪；被刀、被投出局照常开枪'
+                    : '',
+                wordsEnabled(board)
+                    ? '第一夜的死者、以及白天被投票出局的人都留遗言；第二夜起夜里出局的人不再开口'
                     : '',
                 '你可以给场上的人贴标签做记录，那是你自己的判断，别人看不到',
                 '轮到你的身份行动时由你自己点（狼人还能先跟队友说一句）；每一步也都能交给 AI——夜里点「让 AI 决定」，发言点「代笔」',

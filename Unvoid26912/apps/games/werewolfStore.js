@@ -138,6 +138,18 @@ export async function listActiveSessions() {
     return all.filter(s => ACTIVE_STATUS.includes(s.status));
 }
 
+/**
+ * 最近结束的几桌（打完的、流局的都算）——**打完就地在桌上复盘，退出后靠它回来**。
+ * 排序看结束时间；老记录没有 endedAt/voidedAt 就退到 updatedAt：结算那一下必然写过它。
+ */
+export async function listRecentEndedSessions(limit = 3) {
+    const stampOf = s => s.endedAt || s.voidedAt || s.updatedAt || 0;
+    return (await listSessions())
+        .filter(s => s.status === 'ended' || s.status === 'voided')
+        .sort((a, b) => stampOf(b) - stampOf(a))
+        .slice(0, limit);
+}
+
 /** 某类房间下所有未结束的桌（一类可以同时开多张桌） */
 export async function listActiveSessionsByType(typeId) {
     const active = await listActiveSessions();
@@ -163,6 +175,50 @@ export async function getBusyCharacterIds() {
 /*  档案底座（stats 与 npcs 共用同一个形状）                            */
 /* ================================================================ */
 
+/* ---------------- 钻石（角色私有的货币） ----------------
+ * 用户 2026-09-13 定：钻石是这个游戏的货币资源，**每个角色初始 100**、**赢一局 +100**；
+ * **货币与道具都是角色私有**——换主视角就是换一个钱包，不是全局账。
+ * 目前唯一的用处是买「心声」（见 HEART_COST 与 werewolf.js 的 openHeart）。
+ *
+ * **老档案没有 coins 这个字段**：读侧一律走 coinsOf（缺就是初始值），
+ * 所以这里不加新 store、不升版本——与 level/flair/unlocked 那几个扩展字段一个待遇。
+ */
+
+export const START_COINS = 100;   // 每个角色的初始钻石
+export const WIN_COINS = 100;     // 赢一局加多少
+export const HEART_COST = 1;      // 看一条心声花几颗（道具的价钱；以后有第二件道具再谈背包）
+
+/** 读一份档案的余额：没这个字段（老档案、还没打过的新角色）就是初始值；脏值兜到 0 以上 */
+export function coinsOf(record) {
+    const n = Number(record?.coins);
+    if (!Number.isFinite(n)) return START_COINS;
+    return Math.max(0, Math.floor(n));
+}
+
+/**
+ * 扣钻的**纯算术**：够就返回扣完的余额，不够返回 null。
+ * 与落库分开是为了让 A 段能不开浏览器地验这一层（同 accumulate 的理由）。
+ */
+export function spendFrom(record, n = HEART_COST) {
+    const cost = Math.max(0, Math.floor(Number(n) || 0));
+    const left = coinsOf(record) - cost;
+    return left < 0 ? null : left;
+}
+
+/**
+ * 花掉 n 颗钻石：读改写都在**这一个角色**的档案上（角色私有）。
+ * 不够就一颗不扣、返回 null；写库失败也返回 null。**不记「买了什么」**——
+ * 目前只有心声一件道具，等真有第二件再谈背包与流水。
+ */
+export async function spendCoins(characterId, n = HEART_COST) {
+    if (!characterId) return null;
+    const current = await getStat(characterId);
+    const left = spendFrom(current, n);
+    if (left === null) return null;
+    const stat = { ...emptyStat(characterId), ...(current || {}), coins: left };
+    return (await writeStore(STORE_STATS, s => s.put(stat, characterId))) ? left : null;
+}
+
 /**
  * 一份角色档案：战绩 + 档位 + 点亮。真实角色（名册/网络）与临时路人**共用这一套字段**，
  * 所以累加与点亮都只有一份逻辑，两条线不会漂。
@@ -174,6 +230,7 @@ function blank() {
         played: 0,
         win: 0,
         lose: 0,
+        coins: START_COINS,   // 钻石余额（角色私有，读侧一律走 coinsOf；见上面的那一段）
         byRole: {},        // { 身份id: { played, win } }
         byType: {},        // { 房间分类id: { played, win } }
         streak: 0,         // 当前连胜
@@ -225,6 +282,8 @@ export function accumulate(record, detail = {}) {
         played: (Number(base.played) || 0) + 1,
         win: (Number(base.win) || 0) + (win ? 1 : 0),
         lose: (Number(base.lose) || 0) + (win ? 0 : 1),
+        // 赢一局进账（角色私有；输了不动——钻石只增不减，唯一的花处是买心声）
+        coins: coinsOf(base) + (win ? WIN_COINS : 0),
         streak: win ? (Number(base.streak) || 0) + 1 : 0,
         survival: (Number(base.survival) || 0) + (detail.survived ? 1 : 0),
         byRole: bump(base.byRole, detail.role, win),

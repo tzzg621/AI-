@@ -1,11 +1,12 @@
 // apps/games/werewolfStore.js — 狼人杀独立 IndexedDB 存储
-// DB: werewolfDB v2
+// DB: werewolfDB v3
 //   sessions（keyPath id）+ 索引 status / participantIds(multiEntry)：一桌一局的完整记录（含 forming 准备态）
 //   stats（**out-of-line key = characterId**）：真实角色的角色档案 = 战绩 + 档位 + 点亮
 //     （名册里的、网络里的都算「真实角色」——能不能上桌和坐不坐主视角是两回事：
 //      参与只要求它是个角色，主视角才必须是名册角色；所以这里按 characterId 存，不查名册）
 //   npcs（keyPath npcId）：临时路人池（凑人数现造的，只在本库）；路人档案**与 stats 同形**
 //   rooms（keyPath typeId）：房间分类配置 + 该类累计开桌数（本期由代码常量种子写入）
+//   rules（**out-of-line key**）：这一桌的做法约定模板库，一条记录（键 'templates'）装下整个数组
 //
 // 约定：
 // - 只存角色 id（关联角色），不复制角色卡正文。
@@ -13,19 +14,23 @@
 // - 一类房间下可以同时存在多张桌：sessions 里同 typeId 的多条记录，各占一个 tableNo。
 // - session 是自由结构（phase/votes/revealMode 明牌暗牌等字段由引擎与界面往上挂）：
 //   新加字段只要不建索引就不用升 DB_VERSION，老记录缺字段时由读侧兜底。
-// - **档案（stats / npcs）不加新 store、不升版本**：档位与点亮是往既有记录上挂的扩展字段，
-//   `{ ...blank(), ...current }` 保得住未知字段，老记录照旧读得出。升 DB_VERSION 会顺手
-//   重建 rooms（onupgradeneeded 里那次 deleteObjectStore 没有版本守卫），桌号会从头再来。
+// - **加字段不升版本，加 store 才升**：档案（stats / npcs）的档位、点亮、钻石都是往既有记录上挂的
+//   扩展字段，`{ ...blank(), ...current }` 保得住未知字段，老记录照旧读得出；加一个新 store（v3 的 rules）
+//   才需要升 DB_VERSION，而「缺什么建什么」是幂等的、免守卫的——见 onupgradeneeded 顶部那段说明。
 // - 战绩的累加只有一份（本文件的 accumulate），真实角色与临时路人两条档案线共用；
 //   手册/界面只**读**这里写好的字段，本文件不 import apps/ 里任何模块（依赖只向下）。
 
 const DB_NAME = 'werewolfDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORE_SESSIONS = 'sessions';
 const STORE_STATS = 'stats';
 const STORE_NPCS = 'npcs';
 const STORE_ROOMS = 'rooms';
+const STORE_RULES = 'rules';
+
+// rules 里那条记录的键：一条装下整个模板数组 [{ id, name, text }]
+const RULES_KEY = 'templates';
 
 // 占用中的局状态（其余状态一律视为解锁）
 export const ACTIVE_STATUS = ['forming', 'ongoing'];
@@ -39,6 +44,25 @@ function openDB() {
         const req = indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = e => {
             const db = e.target.result;
+
+            /*
+             * 迁移只有两种，照 simCityStore 的形状排（那里是 `else if (e.oldVersion < 4)` 配 clear()）：
+             *
+             * ① **破坏性步骤**（删 store / 改形状）：形状变了的 store 没别的办法，只能重建。
+             *    这类步骤必须写 `e.oldVersion < N`——它不是补丁，是这步迁移的**身份**：
+             *    「这一档还没跑过」才跑，一个库一生只跑一次。rooms 的键从 roomId 变成 typeId
+             *    就是这种（v2）。漏了守卫的后果不是「这次多删一次」，而是**以后每次**加 store
+             *    都会顺手把它重建一遍、各类房间的累计开桌数从头再来（v3 才补上）。
+             *
+             * ② **幂等建**（缺什么建什么）：跑一百遍也没事，所以**不需要守卫**，也不需要
+             *    记住任何规矩——以后加 store 就往下面那块加一行。升 DB_VERSION 只是为了
+             *    让 onupgradeneeded 有机会跑，不为别的。
+             */
+
+            if (e.oldVersion < 2 && db.objectStoreNames.contains(STORE_ROOMS)) {
+                db.deleteObjectStore(STORE_ROOMS);   // v1→v2：rooms 的键 roomId → typeId，形状变了
+            }
+
             if (!db.objectStoreNames.contains(STORE_SESSIONS)) {
                 const store = db.createObjectStore(STORE_SESSIONS, { keyPath: 'id' });
                 store.createIndex('status', 'status');
@@ -51,9 +75,12 @@ function openDB() {
             if (!db.objectStoreNames.contains(STORE_NPCS)) {
                 db.createObjectStore(STORE_NPCS, { keyPath: 'npcId' });
             }
-            // v2：rooms 从「一桌一条」改成「一个分类一条」（键 roomId → typeId）
-            if (db.objectStoreNames.contains(STORE_ROOMS)) db.deleteObjectStore(STORE_ROOMS);
-            db.createObjectStore(STORE_ROOMS, { keyPath: 'typeId' });
+            if (!db.objectStoreNames.contains(STORE_ROOMS)) {
+                db.createObjectStore(STORE_ROOMS, { keyPath: 'typeId' });
+            }
+            if (!db.objectStoreNames.contains(STORE_RULES)) {
+                db.createObjectStore(STORE_RULES);   // v3：做法约定模板库（out-of-line key = 'templates'）
+            }
         };
         req.onsuccess = () => {
             const db = req.result;
@@ -465,4 +492,69 @@ export async function nextTableNo(typeId) {
         tx.onerror = () => resolve(1);
         tx.onabort = () => resolve(1);
     });
+}
+
+/* ================================================================ */
+/*  rules（这一桌的做法约定：模板库 + 同步缓存）                        */
+/* ================================================================ */
+
+/*
+ * 模板库是**全局**的（作者写一份，各桌按 id 勾选引用）：桌只存「勾了哪几条 + 自己写的一段补充」，
+ * 正文永远从这里现取——所以改一条模板，引用了它的桌（含正在打的）下一次调用就是新文字。
+ * 这就是「引用」与「复制快照」的分界，也是这个功能的命门。
+ * 桌的 `ruleTemplateIds` 里留着一个已删模板的 id 是**允许的**：读侧 `find` 不到就跳过，不回头清引用。
+ *
+ * 那份缓存是必需的，不是偷懒：提示词组装（roleHead → roleHeadText）是**同步**的，每个对局内
+ * 调用都要用，不可能每处去读库。ensureRuleTemplates() 在开桌流程里载一次，之后一律
+ * cachedRuleTemplates()；唯一的写入口是 saveRuleTemplates()，它顺手更新缓存，两边不会不同步。
+ */
+
+/**
+ * 一条模板只用这三样：id（各桌按它引用）、name（列表上的大字）、text（进提示词的正文）。
+ * 别的字段一律丢掉——store 是自由结构，读出来什么形状不该漏进提示词。
+ */
+function sanitizeTemplates(list) {
+    return (Array.isArray(list) ? list : [])
+        .filter(t => t && typeof t.id === 'string' && t.id)
+        .map(t => ({
+            id: t.id,
+            name: typeof t.name === 'string' ? t.name : '',
+            text: typeof t.text === 'string' ? t.text : ''
+        }));
+}
+
+let rulesCache = [];      // 模块级缓存：提示词侧同步读它
+let rulesLoaded = false;  // 载过没有——载过就不再读库（写入时同步更新缓存）
+let rulesLoading = null;  // 并发的 ensure 共用同一次读
+
+/** 同步取缓存。没载过 / 库里是空的 → []（**不预置任何模板**，空库起步） */
+export function cachedRuleTemplates() {
+    return rulesCache;
+}
+
+/** 开桌流程里调一次：把库读进缓存。读不动就当空库，不抛（提示词那边要的只是「有个数组」） */
+export async function ensureRuleTemplates() {
+    if (rulesLoaded) return rulesCache;
+    if (!rulesLoading) {
+        rulesLoading = readStore(STORE_RULES, s => s.get(RULES_KEY), null).then(raw => {
+            if (!rulesLoaded) {
+                rulesCache = sanitizeTemplates(raw);
+                rulesLoaded = true;
+            }
+            rulesLoading = null;
+            return rulesCache;
+        });
+    }
+    return rulesLoading;
+}
+
+/** 整条数组写回 + 同步更新缓存（模板的增删改都走这里，改完对新老各桌一起生效） */
+export async function saveRuleTemplates(list) {
+    rulesCache = sanitizeTemplates(list);
+    rulesLoaded = true;
+    return writeStore(STORE_RULES, s => s.put(rulesCache, RULES_KEY));
+}
+
+export function newTemplateId() {
+    return 'rule_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }

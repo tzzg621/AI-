@@ -45,6 +45,18 @@
     cursor: pointer;
 }
 
+/* 顶栏两侧各包一层、且**等宽**：.ww-topbar 是 space-between，右边多一个按钮
+   （对局页有 📜 与 ✕）而左边还是一个返回键时，标题会被挤偏 20px——这道配重就是治它。 */
+.ww-topbar-l,
+.ww-topbar-r {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 74px;   /* 两个 34px 按钮 + 6px 间距 */
+}
+
+.ww-topbar-r { justify-content: flex-end; }
+
 .ww-brand { text-align: center; min-width: 0; }
 
 .ww-brand small {
@@ -601,6 +613,41 @@
 .ww-entry.is-locked { background: rgba(255, 255, 255, .42); box-shadow: none; }
 .ww-entry.is-locked .ww-entry-head strong { color: var(--muted); }
 .ww-entry.is-locked p { color: var(--muted); font-size: 11px; }
+
+/* 「还锁着的层」那一行（亮着的卡片上也有）。写成 `p.` 打头是为了压过上面 `.ww-entry p`
+   的 11.5px（同权重、靠后生效）；`.ww-entry.is-locked p` 权重更高，锁着的卡片外观一字不变。 */
+p.ww-entry-cond { color: var(--muted); font-size: 11px; }
+
+/* ---------------- 这一桌的做法约定（顶栏 📜 那个面板） ----------------
+   模板卡就是 .ww-entry：点卡身勾上/取消（未选中的整卡压暗，沿用上面那套），
+   编辑态那张卡里换成「名字一行 + 正文一框 + 三个小按钮」。 */
+
+.ww-rule-tpl[role="button"] {
+    width: 100%;
+    text-align: left;      /* 卡是 div[role=button]，这三行把它拉回块级文字的排布 */
+    font-family: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.ww-rule-name { flex: 1; min-width: 0; }        /* head 里与 ✎ 同一行 */
+.ww-rule-text { margin-top: 8px; }
+.ww-rule-actions { display: flex; gap: 6px; margin-top: 8px; }
+.ww-rule-actions .ww-small-button { flex: 1; }
+.ww-small-button.ww-rule-del { color: #8d3f33; }   /* 比 .ghost 的正文色再重一点 */
+
+/* head 里的 ✎ / ✕：长在可点的卡里，得比正文更低调（同 .ww-rule-tpl[role=button] 的层叠） */
+.ww-rule-icon {
+    flex-shrink: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.ww-rule-count { margin-top: 6px; text-align: right; font-size: 11px; color: var(--muted); }
 
 /* ---------------- 弹窗 ---------------- */
 

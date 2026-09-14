@@ -97,11 +97,14 @@ export const BOARDS = {
         lastWords: true,
         pk: true,
         // 预算这件事先放一放（2026-09-13）：板子暂不下发 callBudget，整局不封顶。
-        // 想收回来就在这儿加一行 `callBudget: 150`（12 人局夜里 3 步 + 白天 2×存活人数，一局约 100 次）。
-        // 夜里：狼刀 → 女巫（要先看到刀口才决定救不救）→ 预言家 → 猎人（每夜都叫到他；
-        // 被刀会死的那个才被告知并决定开不开枪）。这一桌没有守卫，所以没有守人那一步。
-        nightOrder: ['night_wolf', 'night_witch', 'night_seer', 'night_hunter'],
-        roles: { werewolf: 4, seer: 1, witch: 1, hunter: 1, idiot: 1, villager: 4 }
+        // 想收回来就在这儿加一行 `callBudget: 150`（12 人局夜里 4 步 + 白天 2×存活人数，一局约 110 次）。
+        // 夜里：守卫（排在狼前面：先守后刀，他手里不可能有今晚的刀口）→ 狼刀 →
+        // 女巫（要先看到刀口才决定救不救）→ 预言家 → 猎人（每夜都叫到他；
+        // 被刀会死的那个才被告知并决定开不开枪）。
+        // **白痴换守卫**（用户 2026-09-14：无警长的 12 人局里白痴太不平衡）——
+        // 白痴那张牌与「翻牌免死」的引擎逻辑原样留着，只是没有板子发它（见 ROLE_META.idiot）。
+        nightOrder: ['night_guard', 'night_wolf', 'night_witch', 'night_seer', 'night_hunter'],
+        roles: { werewolf: 4, seer: 1, witch: 1, guard: 1, hunter: 1, villager: 4 }
     }
 };
 
@@ -178,7 +181,7 @@ export const ROOM_TYPES = [
         name: '12 人标准局',
         icon: '🌕',
         boardId: 'board12_standard',
-        desc: '标准预女猎白：4 狼对 4 神 4 民，屠边胜负，出局有遗言，平票进 PK',
+        desc: '标准预女猎守：4 狼对 4 神 4 民，屠边胜负，出局有遗言，平票进 PK',
         speechLimit: 160,
         pace: 900,
         tone: '这是正经的一局：人多、信息杂，盘逻辑、算票型、盯发言，别急着下结论',
@@ -202,6 +205,78 @@ export function revealModeOf(session) {
 
 export function revealLabel(mode) {
     return mode === 'open' ? '明牌' : '暗牌';
+}
+
+/* ---------------- 这一桌的做法约定（作者自定义：模板正文 + 本桌补充） ---------------- */
+
+/*
+ * 模板里写的是**打牌的习惯**（「发言短一点」「多聊票型」），是人话、是这一桌的约定，不是硬规则，
+ * 所以注入时只给它一个壳：说清这是这一桌事先说好的，作者写的正文一字不改地摆进去。
+ * 措辞纪律照 [[prompt-write-facts-not-bans]]：写成陈述，不写成禁令（点名禁止反而招模型去聊）。
+ * 末行那句 precedence 是给冲突兜底的：模型读到的规则不止这一块（阵容、屠边、遗言全是代码常量），
+ * 作者的模板万一跟板子的硬规则顶上了，得以板子为准——它得知道自己不是最高法。
+ */
+export const RULES_HEAD = '【这一桌的做法约定】';
+
+/** 勾了哪几条模板：非数组 → []（老 session 没这个字段，或存了脏值） */
+export function ruleTemplateIdsOf(session) {
+    return Array.isArray(session?.ruleTemplateIds) ? session.ruleTemplateIds : [];
+}
+
+/** 本桌自己写的那段补充：非字符串 → '' */
+export function ruleNoteOf(session) {
+    return typeof session?.ruleNote === 'string' ? session.ruleNote : '';
+}
+
+/**
+ * 勾的模板正文（按勾选次序取，找不到的 id **跳过**——模板删了不清各桌的引用）+ 自己写的那段。
+ * **模板在前、补充在后**：与面板里的排布、与「勾几条再追加一段」的心智一致。
+ */
+export function tableRulesText(session, allTemplates = []) {
+    const picked = ruleTemplateIdsOf(session)
+        .map(id => (allTemplates || []).find(t => t.id === id)?.text || '')
+        .filter(Boolean);
+    // 只有空白的整段等于没写：别让它拼出一个「有壳、没内容」的块（正文一字不改，只是不留空条）
+    return [...picked, ruleNoteOf(session)].filter(t => t.trim());
+}
+
+/** 注入提示词的那一块。一条都没勾、也没写 → ''（不留一个空标题在那里） */
+export function tableRulesBlock(session, allTemplates = []) {
+    const parts = tableRulesText(session, allTemplates);
+    if (!parts.length) return '';
+    return [
+        RULES_HEAD,
+        '这一桌的人事先说好了下面这些，这一桌按这个来打：',
+        ...parts.flatMap(t => t.split('\n').map(l => l.trim()).filter(Boolean)).map(l => `· ${l}`),
+        '（这一桌的板子与规则以法官公布的为准。）'
+    ].join('\n');
+}
+
+/**
+ * 角色扮演的通用头（每个对局内调用都用它做 systemPrompt 开头）。板子构成按实际板子生成。
+ *
+ * 「规则上不设警长」是**夹在阵容里的一个事实**，不是一条禁令：模型见到「12 人局」自带
+ * 警长、警徽流那一套先验（用户 2026-09-13 实测它煞有介事地聊警徽流），只改规则页拦不住，
+ * 每次调用都得让它知道这桌的实情。但别写成「不许提警长」——越强调越招它去聊，
+ * 人也真会记错规则，偶尔说漏一句就随它去。措辞取「不设」而非「没有」：是规则设定，
+ * 不是缺了什么（用户当天定）。
+ *
+ * 作者的自定义块摆在风格护栏**之前**：那句「不要复述规则」管的是他该怎么说话，
+ * 紧跟在自己这块后面会被读成「别念下面这些」。什么都没勾没写时整块不出现。
+ *
+ * 注意这里是**纯函数**：模板数组由调用方传进来（`allTemplates`），本文件因此
+ * 零 import、能被 E2E 逐字复制成 .mjs 直接断言（`tests/e2e-werewolf.js` 的 A 段）。
+ */
+export function roleHeadText(session, allTemplates = []) {
+    const board = getBoard(session?.boardId);
+    return [
+        '你在扮演一个角色，正在玩一桌狼人杀（'
+            + `${boardProse(board.id)}，靠发言和投票找出狼人`
+            + (sheriffOf(board) ? '）。' : '；这一桌规则上不设警长）。'),
+        tableRulesBlock(session, allTemplates),
+        '完全以这个角色的人设说话，用第一人称，不要跳出角色；'
+            + '不要提到「AI」「模型」「提示词」「系统」，不要替别人说话，不要复述规则。'
+    ].filter(Boolean).join('\n');
 }
 
 /* ---------------- 主视角预设标签 ---------------- */
@@ -256,6 +331,10 @@ export function buildRulesPage(type) {
             title: '一个白天',
             lines: [
                 '依次发言：每个人说一段自己的判断',
+                // 发言的起点与方向（用户 2026-09-14）：没有警长的时候由系统掷——死左或死右、
+                // 顺序或逆序、起点也随机，每个天亮当场公布；将来看 sheriffOf 交给警长定。
+                '从谁开口不是固定的：这一桌不设警长，由法官在每个天亮当场掷——从死者的左边或右边起、'
+                    + '顺着或倒着、开头的人也随机，掷完当场公布',
                 pkEnabled(board)
                     ? '全员投票：投完统一开票，票数最高者出局；平票的几人上台 PK 再投一轮——'
                         + '台上的人这一轮不投票，台下的人只能投台上的人或弃票，再平票则本轮无人出局'
@@ -280,6 +359,11 @@ export function buildRulesPage(type) {
                 '身份只有自己知道：每个角色只掌握自己的身份与夜里看到的信息',
                 board.roles.guard
                     ? '守卫守中当晚的刀口就是平安夜；平安夜也可能只是狼没下刀，两者看起来一样'
+                    : '',
+                // 守与救同时落在一个人身上 = 反而救死。与猎人那条一样只在**两个身份都在**时才写：
+                // 6 人板没女巫，提了就是误导（守卫板与女巫板合流的 12 人板才需要讲这一条）
+                board.roles.guard && board.roles.witch
+                    ? '守卫与女巫的解药落在同一个人身上，反而救不回来——恰好一个人保他，他才活'
                     : '',
                 board.roles.witch && board.roles.hunter
                     ? '猎人被女巫毒死不能开枪；被刀、被投出局照常开枪'

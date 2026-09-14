@@ -8,6 +8,9 @@
 //   round       第几天（1 起）
 //   roundId     每推进一个「结算」自增，用来丢弃过期响应（照 textAdventure 的比对思路）
 //   revealMode  'open'（明牌：出局即报身份）| 'hidden'（暗牌：出局不带身份，技能没发动就静默）
+//   morningDeaths 昨夜的死者（公布次序：刀→毒→枪），结算时记；下一天结算时被覆盖
+//   speakPlan   这一天的发言次序：{ side, dir, anchor, start }。**没有警长时由系统掷**
+//               （rollSpeakPlan，掷一次管一整天：发言与 PK 台上同一条次序）
 //   seats[]     { seat, kind, characterId|npcId, name, role, alive }
 //   events[]    事件流水（type/text/round/seat）；isPublic:false 的（目前只有狼队频道 wolfchat）
 //               永不进 publicFeed，界面侧另按 type 过一遍才决定给谁看
@@ -17,6 +20,8 @@
 //   seerLog[]   验人结果（私有，只有那个预言家能看到自己的）
 //   guardLog[]  守过谁（私有，只有那个守卫能看到自己的；「不能连守」也读它）
 //   aiNotes{}   各座位的 AI 私有笔记（按座号分组，只有本人能看到自己的；写入走 addNote）
+//   aiLabels{}  各座位给场上的人贴的判断（`{ 目标座号: '标签' }`，只有本人能看到自己的；
+//               写入走 mergeLabels——一个人只有一个标签，能改能撤，见那里的说明）
 //   aiHearts{}  各座位投票那一刻的「心声」（按座号分组，写入走 addHeart）。**今天只写不读**：
 //               它天生带身份，进别人的视角就是上帝视角；但它**属于写出它的那个角色**，
 //               以后要给它自己用（比如聊天）是另一回事——红线是「不进别人的提示词」，不是「永不读」
@@ -33,7 +38,7 @@
 // ② 文案里带不带身份由 revealMode 决定：明牌局把「（猎人）」写进流水，暗牌局一个字都不提。
 // ③ 私有事件靠两道闸：isPublic:false 挡住 AI（publicFeed 是白名单），type 挡住界面（renderFeed 只给该看的人）。
 
-import { getBoard, factionOf, roleLabel, revealModeOf, winModeOf, sideOf, wordsEnabled, pkEnabled } from './werewolfRooms.js';
+import { getBoard, factionOf, roleLabel, revealModeOf, winModeOf, sideOf, wordsEnabled, pkEnabled, markTagsOf } from './werewolfRooms.js';
 
 /* ---------------- 阶段 ---------------- */
 
@@ -82,9 +87,10 @@ export function phaseLabel(session) {
 }
 
 /**
- * 夜里依次走哪几步。板子写了 `nightOrder` 就按它的——12 人局没有守卫那一步（不必每夜白点一次），
- * 女巫还要排在狼刀之后、预言家之前（她得先看到刀口才谈得上救不救）；
- * 没写就是这一套默认序，**逐字等于 6 人板今天的流程**。
+ * 夜里依次走哪几步。板子写了 `nightOrder` 就按它的：12 人板写了自己那一份——
+ * 守卫排在狼刀之前（先守后刀，他手里不可能有今晚的刀口）、女巫排在狼刀之后预言家之前
+ * （她得先看到刀口才谈得上救不救）；没写就是下面这套默认序，6 人板至今不写，
+ * 所以它**逐字就是 6 人板那份流程**（老板子与老 session 因此一个字不用改）。
  */
 const DEFAULT_NIGHT_ORDER = ['night_guard', 'night_wolf', 'night_seer'];
 
@@ -136,10 +142,84 @@ export function aliveCountOf(session, faction) {
     return aliveSeats(session).filter(s => factionOf(s.role) === faction).length;
 }
 
-/** 谁是下一个还没发言的活人（发言按座号顺序） */
+/**
+ * 发言次序：起点不定，方向不定（每个天亮现掷，见 rollSpeakPlan），掷出来钉在 `session.speakPlan` 上。
+ * 次序 = 活人座号从起点起**按这一轮的方向**挨个往下数、绕过座位表末尾接回开头（出局的人本就不在名单里）。
+ * 没掷过（老 session、测试里手搓的局面）就是座号从小到大——今天之前的行为。
+ */
+function rotateFrom(list, start, dir) {
+    const walk = dir === -1 ? [...list].reverse() : list;
+    const i = walk.indexOf(start);
+    return i > 0 ? [...walk.slice(i), ...walk.slice(0, i)] : walk;
+}
+
+export function speakOrderSeats(session) {
+    const plan = session?.speakPlan;
+    return rotateFrom(aliveSeats(session).map(s => s.seat), plan?.start, plan?.dir === -1 ? -1 : 1);
+}
+
+/** 谁是下一个还没发言的活人（按这一轮的次序，见 speakOrderSeats） */
 export function currentSpeaker(session) {
     const spoke = new Set(session?.spokeThisRound || []);
-    return aliveSeats(session).find(s => !spoke.has(s.seat)) || null;
+    for (const n of speakOrderSeats(session)) {
+        if (!spoke.has(n)) return seatAt(session, n);
+    }
+    return null;
+}
+
+/* ---- 每个天亮：这一轮从谁开口、朝哪边数 ----
+ * 用户 2026-09-14 定：**没有警长的时候这一手由系统掷**（将来 sheriffOf 的板子上交给警长定，
+ * 钩子就在 rollSpeakPlan 这里）。三条一起掷：
+ *   ① 从死者的**左边**（下家，座号 +1 那边）还是**右边**（上家，−1 那边）起；
+ *   ② **顺着**数（座号递增）还是**倒着**数（递减）；
+ *   ③ 锚——**起点本身也是随机挑的**：昨夜走了不止一个人，就从他们中间随机挑一个当锚；
+ *      平安夜一个死者都没有，起点直接从活人里随机挑。
+ * 掷一次管一整天（发言与 PK 台上同一条次序），进白天发言那一步落定（toDaySpeak），
+ * 之后中途有人出局也不会把次序重算成另一个样子。公开流水与 AI 的秩序块读的都是它。
+ */
+
+/**
+ * 掷这一天的发言次序。返回值一律**放在 session.speakPlan 上**（`{side, dir, anchor, start}`）。
+ * rng 从参数进来（跟 shuffle/startGame 一个规矩），测试里喂一串定值就能把四种组合都走一遍。
+ */
+export function rollSpeakPlan(session, rng = Math.random) {
+    const side = rng() < 0.5 ? 'left' : 'right';     // 死左 / 死右
+    const dir = rng() < 0.5 ? 1 : -1;                // 顺序 / 逆序
+    const total = (session.seats || []).length;
+    const dead = (session.morningDeaths || []).filter(n => seatAt(session, n));
+    const anchor = dead.length ? dead[Math.floor(rng() * dead.length)] : null;
+    const alive = act => { const s = seatAt(session, act); return s && s.alive !== false; };
+    const nbr = step => {                             // 死者旁边可能也是空的：挨个往下找到第一个活人
+        for (let i = 1; i <= total; i++) {
+            const n = ((anchor - 1 + step * i) % total + total) % total + 1;
+            if (alive(n)) return n;
+        }
+        return null;
+    };
+    let start;
+    if (anchor == null) {                             // 平安夜：起点也是随机挑一个活人
+        const live = aliveSeats(session).map(s => s.seat);
+        start = live.length ? live[Math.floor(rng() * live.length)] : null;
+    } else {
+        start = nbr(side === 'left' ? 1 : -1);        // 左 = 下家(+1)，右 = 上家(−1)
+    }
+    return { side, dir, anchor, start };
+}
+
+/**
+ * 这一轮从谁开口这一句话——**公开流水与 AI 的秩序块共用这一份说法**（单条判定只写在这里，不会漂）。
+ * 措辞照 [[prompt-write-facts-not-bans]]：只报事实（谁走、从谁起、朝哪边），不写成禁令。
+ * 没掷过（speakPlan 还没落）就说按座号——老 session 与老测试看到的仍是原来那句。
+ */
+export function speakOrderLine(session) {
+    const plan = session?.speakPlan;
+    const way = plan?.dir === -1 ? '倒着数（座号递减）' : '顺着数（座号递增）';
+    if (!plan || plan.start == null) return '天亮后从活着的人里按座号依次发言';
+    if (plan.anchor == null) {
+        return `昨夜是平安夜，没有死者可锚——从 ${plan.start} 号起${way}`;
+    }
+    return `昨夜走的是 ${plan.anchor} 号，从他的${plan.side === 'left' ? '左边' : '右边'}（`
+        + `${plan.side === 'left' ? '下家' : '上家'}）起${way}，所以这一轮从 ${plan.start} 号说起`;
 }
 
 /**
@@ -321,14 +401,20 @@ export function addNote(session, seatNo, { kind = '', text = '' } = {}) {
  */
 
 export const HEART_LIMIT_PER_SEAT = 30;   // 每个座位最多留多少条（截尾，新的留着）
-export const HEART_MAX_CHARS = 80;        // 一条心声的长度上限
 
 /**
  * 收下某个座位这一轮的心声。**今天只写不读**——但要读也只能给它自己读（见上面那段）。
  * 与 addNote 同理，**写点必须在 runTurn 的 apply 回调里**（call 阶段改的是内存副本）。
+ *
+ * **一条心声不设字数上限**（用户 2026-09-14 定，此前是 80 字硬截）：多长看这个角色自己——
+ * 一句话到一长串都可能，内容从这一局发散到别的什么也都由他。理由是他那句话：
+ * **「无论写多长都不会占用下一次提示词」**（心声不进任何提示词，见上面那段红线），
+ * 所以长度在这里没有下游代价，截断反而把「这个人此刻是什么状态」砍掉了。
+ * 唯一的上游边界是投票那次调用自己的输出上限（见 werewolfAI 的 DEFAULT_MAX_TOKENS）——
+ * 那是「这一次调用说了多少话」的账，不该由这里再补一刀。**别把上限加回来。**
  */
 export function addHeart(session, seatNo, { kind = 'vote', text = '' } = {}) {
-    const body = String(text || '').trim().slice(0, HEART_MAX_CHARS);
+    const body = String(text || '').trim();
     if (!session || !seatNo || !body) return false;
     const all = session.aiHearts = session.aiHearts || {};
     all[seatNo] = [...(all[seatNo] || []), { round: session.round || 1, kind, text: body }]
@@ -390,6 +476,109 @@ function watchedAt(entries, n) {
     return ids;
 }
 
+/* ---------------- 标记（AI 给场上的人贴的「他是什么」） ----------------
+ * 存 `session.aiLabels[它自己] = { 目标座号: '标签' }`，只回灌它自己后续的提示词——
+ * 别人（含主视角）看不到，界面也不显示。
+ *
+ * 口径（用户 2026-09-14 定）：**一个人只有一个标签：能改、能撤，不能多贴**，
+ * 主视角那侧（session.marks）照同一套走；**词表也只有一张**——`markTagsOf(session)`
+ * （跟着这一桌的板子走），主视角点的芯片与 AI 写的标签都从它里面挑，认不出的一律丢掉。
+ * 语义照关注表那套心智：**写到谁就重定谁，没写的人维持原样**；撤掉 = 传 null / 空
+ * （写出来就是从这个人的名字上把标签拿掉，不是留一个空格）。
+ *
+ * 认（`parseMarks`）/ 落库（`mergeLabels`）/ 读侧归一（`labelsOf`）/ 提示词那一行
+ * （`labelLineOf`）**四件都在这里**——放引擎只有一个理由：A 段 `--engine` 跑得到
+ * （`werewolfAI.js` 的依赖链读 localStorage，Node 里 import 不进来）。
+ */
+
+/** `狼`/`民` 这类简写归一到词表里的写法；「撤掉」的两种写法（文本那行与 JSON 那条路） */
+const MARK_ALIAS = { 狼: '狼人', 民: '村民' };
+const MARK_CLEAR = ['取消', '清除'];
+
+/**
+ * 【判断】那一行 → `{ 3: '狼人', 5: '存疑', 7: null }`
+ * 认法与 `parseWatchTargets`（【关注】那一行）同一处、同一套宽进严出：
+ * 只认**这一桌词表里**的标签（跟着板子走，见 markTagsOf），`狼`/`民` 这类简写归一到词表里的写法，
+ * 认不出的整条丢掉；**null = 撤掉**——与「认不出」分开：认不出的是丢掉这一条、不动原来的表。
+ * @param {string} text 那一行的原文
+ * @param {object} [session] 这一桌（词表跟着板子走；不给就按 6 人板的词表认）
+ */
+export function parseMarks(text, session = null) {
+    const tags = [...markTagsOf(session), ...Object.keys(MARK_ALIAS), ...MARK_CLEAR];
+    // 每次新起一个正则，免得 lastIndex 带着上一轮的游标
+    const re = new RegExp(`(\\d{1,2})\\s*号?\\s*(?:=|＝|：|:|是|为|->|→)?\\s*(${tags.join('|')})`, 'g');
+    const out = {};
+    let m;
+    while ((m = re.exec(String(text || '')))) {
+        const seat = Number(m[1]);
+        if (seat < 1 || seat > 20) continue;
+        const tag = m[2];
+        out[seat] = MARK_CLEAR.includes(tag) ? null : (MARK_ALIAS[tag] || tag);
+    }
+    return out;
+}
+
+/**
+ * 一个值 → 标签／null（明确撤掉）／''（认不出，丢掉这一条）。
+ * 老数据里主视角那份是数组：按**最后一个**算（那时候是多选，最后点的是最后写的）。
+ */
+function tagOf(v, tags) {
+    if (v == null) return null;
+    if (Array.isArray(v)) return v.length ? tagOf(v[v.length - 1], tags) : null;
+    const s = String(v).trim();
+    if (!s) return null;
+    if (MARK_CLEAR.includes(s)) return null;
+    const tag = MARK_ALIAS[s] || s;
+    return tags.includes(tag) ? tag : '';
+}
+
+/**
+ * 收下某个座位这一轮写的判断：**写到谁重定谁，没写的人维持原样**；
+ * 传 null / 空串 = 把这个人从表里划掉。
+ * 认不出的那一条整条丢掉、不动这个人已有的标签（脏数据不该把整张表带走）。
+ * 与 addNote / setWatch 同理，**写点必须在 runTurn 的 apply 回调里**（call 阶段改的是内存副本）。
+ */
+export function mergeLabels(session, seatNo, marks = {}) {
+    if (!session || !seatNo || !marks) return false;
+    const me = Number(seatNo);
+    const tags = markTagsOf(session);
+    const cur = labelsOf(session, me);
+    let touched = false;
+    for (const [key, val] of Object.entries(marks)) {
+        const target = Number(String(key).replace(/[^\d]/g, ''));   // 容忍 "3号" 这种键
+        // 表是「对场上这些人」的：不给自己贴，也不给这桌上没有的座号贴（死了的照收——他的身份已经明了）
+        if (!(target >= 1 && target <= 20) || target === me || !seatAt(session, target)) continue;
+        const tag = tagOf(val, tags);
+        if (tag === null) { delete cur[target]; touched = true; continue; }
+        if (!tag) continue;
+        cur[target] = tag;
+        touched = true;
+    }
+    if (!touched) return false;
+    (session.aiLabels = session.aiLabels || {})[me] = cur;
+    return true;
+}
+
+/** 某个座位此刻那张表（读侧归一：老数据的数组只留最后一个、不在词表里的标签丢掉） */
+export function labelsOf(session, seatNo) {
+    const raw = (session?.aiLabels || {})[seatNo];
+    const out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    const tags = markTagsOf(session);
+    for (const [key, val] of Object.entries(raw)) {
+        const target = Number(key);
+        const tag = tagOf(val, tags);
+        if (target >= 1 && target <= 20 && tag) out[target] = tag;
+    }
+    return out;
+}
+
+/** 提示词要的那一行：`3号=狼人、5号=存疑`（空表给空串，调用方自己决定要不要抬头） */
+export function labelLineOf(session, seatNo) {
+    const map = labelsOf(session, seatNo);
+    return Object.keys(map).map(Number).sort((a, b) => a - b).map(n => `${n}号=${map[n]}`).join('、');
+}
+
 /**
  * 发牌开局（座位必须坐满）
  * @returns {boolean} 是否开成
@@ -422,6 +611,7 @@ export function startGame(session, { rng = Math.random } = {}) {
     for (const s of seats) if (s.role === 'witch') session.potions[s.seat] = { heal: true, poison: true };
     session.aiNotes = {};
     session.aiHearts = {};       // 心声：投票的副产物，今天只写不读（见 addHeart）
+    session.aiLabels = {};       // 判断表（上一局的标签不能跟着这一局走；2026-09-14 补——一直漏了这一张）
     session.watch = {};          // 关注表（一局内、按座位）：见 setWatch
     session.eventN = 0;          // 事件序号从这个 0 起（上面 events 也清空了）
     session.dayStartN = 0;       // 第一个白天由 startDay 盖上
@@ -910,7 +1100,7 @@ export function applyLastWords(session, seatNo, text) {
  * 这是刻意的：暗牌局不能从死讯反推守卫守了谁。
  * @returns {{deaths:number[], peaceful:boolean}}
  */
-export function settleNight(session) {
+export function settleNight(session, rng = Math.random) {
     const night = session.night || {};
     const target = night.wolfTarget;
     const guarded = target != null && night.guardTarget === target;
@@ -952,6 +1142,11 @@ export function settleNight(session) {
     }
 
     if (!deaths.length) pushEvent(session, { type: 'system', text: '昨晚是平安夜，没有人出局' });
+    // 死左/死右的锚要的是**昨夜的死者**（deaths 上面是照刀→毒→枪的公布次序攒的）：
+    // 在这一步记下来（下面 sort 之后就分不出公布次序了），随即把这一天的发言次序掷出来——
+    // 掷的时机就放在死人已经落定、天还没亮的这一刻：掷一次管一整天，之后谁再说谁的话都不影响它。
+    session.morningDeaths = deaths.slice();
+    session.speakPlan = rollSpeakPlan(session, rng);
     deaths.sort((a, b) => a - b);
 
     // 复盘要用的「这一夜到底刀了谁」：下面一清空 night 就永远没了。
@@ -1004,7 +1199,9 @@ export function startDay(session) {
 function toDaySpeak(session) {
     session.phase = nextOrEnd(session, 'day_speak');
     if (session.phase !== 'day_speak') return true;     // 已经分出胜负：收场，不再多推一条发言提示
-    pushEvent(session, { type: 'system', text: '从活着的人里按座号挨个发言' });
+    // 这一轮从谁开口、朝哪边数：天亮前结算时就已经掷好钉在 session 上了（见 settleNight / rollSpeakPlan），
+    // 这里只把结果当场公布（公开流水与 AI 的秩序块读的是同一句话）
+    pushEvent(session, { type: 'system', text: speakOrderLine(session) });
     return true;
 }
 
@@ -1156,13 +1353,18 @@ export function onPkStage(session, seatNo) {
     return (session?.pk?.seats || []).includes(seatNo);
 }
 
-/** 台上按座号第一个还没说话的（PK 发言与白天发言一个规矩：按座号来） */
+/**
+ * 台上第一个还没说话的。**与白天发言同一份次序**（同一天里 speakPlan 是同一个）：
+ * 台上这一轮也从同一个起点、同一个方向说起，不然台上台下的次序对不上。
+ */
 export function currentPkSpeaker(session) {
     if (session?.phase !== 'day_pk') return null;
     const spoke = new Set(session.pk?.spoke || []);
-    return (session.pk?.seats || []).slice().sort((a, b) => a - b)
+    // 台上这几个在这一天的次序里谁靠前谁先说（起点不在台上就顺延到台上第一个轮到的）
+    const stage = session.pk?.seats || [];
+    return speakOrderSeats(session).filter(n => stage.includes(n))
         .map(n => seatAt(session, n))
-        .find(s => s && s.alive !== false && !spoke.has(s.seat)) || null;
+        .find(s => s && !spoke.has(s.seat)) || null;
 }
 
 /** 台上的人各自再说一轮（发言事件仍是普通 speak：这一轮的话大家都听得到） */

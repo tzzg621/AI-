@@ -12,14 +12,15 @@ import { taskManager } from '../../store/AITaskManager.js';
 import { CharacterStore } from '../../store/CharacterStore.js';
 import { getVisibleProfile } from '../../store/profileAccess.js';
 import { getCharacterRecordById, getCharacterNameById } from '../characterManager.js';
-import { ROLE_META, getBoard, boardProse, roleLabel, markTagsOf, sheriffOf } from './werewolfRooms.js';
-import { getStat, getNpc } from './werewolfStore.js';
+import { boardProse, roleLabel, markTagsOf, roleHeadText } from './werewolfRooms.js';
+import { getStat, getNpc, cachedRuleTemplates } from './werewolfStore.js';
 import { codexBlock, parseTier, parseFlair, watchPlan, TIERS, FLAIR_TIERS } from './werewolfCodex.js';
 import {
     seatAt, aliveSeats, wolvesOf, seatsOfRole, wolfTargets, seerTargets, guardTargets, witchTargets,
     hunterTargets, hunterWakesTonight, currentDeath, hasLastWords, voteTargets,
-    pkVoteTargets, onPkStage,
-    viewOf, publicFeed, finalResult, nightTruth, reviewTranscript, parseMentions, parseWatchTargets
+    pkVoteTargets, onPkStage, speakOrderSeats, speakOrderLine,
+    viewOf, publicFeed, finalResult, nightTruth, reviewTranscript, parseMentions, parseWatchTargets,
+    parseMarks, labelLineOf
 } from './werewolfEngine.js';
 
 export const DEFAULT_TIMEOUT = 120000;   // 单次调用超时（照占卜/日记口径）
@@ -453,16 +454,6 @@ export function afterCall(session, { ok = true } = {}) {
     return state.template ? 'template' : 'ai';
 }
 
-/**
- * 收下某个 AI 给自己视角下的他人贴的标签。
- * 存进 session.aiLabels[它自己]，只回灌它自己后续的提示词——别人（含主视角）看不到。
- */
-export function mergeLabels(session, seatNo, marks = {}) {
-    if (!session || !marks || !Object.keys(marks).length) return;
-    const all = session.aiLabels = session.aiLabels || {};
-    all[seatNo] = { ...(all[seatNo] || {}), ...marks };
-}
-
 /* ---- 私有笔记（每个 AI 决策的副产物） ----
  * 存储与写入在引擎（addNote，跟 seerLog/guardLog 一处），这里只管怎么讲给模型听。
  */
@@ -482,8 +473,10 @@ function noteHead(note) {
 }
 
 /* ---- 白天的发言秩序 ----
- * 秩序不是策略：这一轮每人只说一次、按座号顺序、出局的人不再开口——
+ * 秩序不是策略：这一轮每人只说一次、按次序挨个说、出局的人不再开口——
  * 这些不该由角色的「水平」决定，所有座位无条件拿到（策略知识才归手册）。
+ * 次序本身随这一桌的规矩变（可能从座号最小的人起，也可能从死者的下家/上家起，见引擎 speakOrderSeats），
+ * 但这件事照旧不是策略：**这一桌怎么定的、这一轮从谁起，所有人都一样地知道**。
  */
 
 /**
@@ -495,13 +488,17 @@ function noteHead(note) {
 function speakOrderBlock(session, seatNo) {
     if (session?.phase !== 'day_speak') return '';
     const spoke = new Set(session.spokeThisRound || []);
-    const alive = aliveSeats(session);
-    const done = alive.filter(s => spoke.has(s.seat));
-    const after = alive.filter(s => !spoke.has(s.seat) && s.seat !== seatNo);
-    const names = list => list.map(s => `${s.seat} 号 ${s.name}`).join('、');
+    // 次序按**这一轮真正在用的那一份**（这一桌选了死左/死右，起点就不是 1 号了，见引擎的 speakOrderSeats）
+    const order = speakOrderSeats(session);
+    const done = order.filter(n => spoke.has(n));
+    const after = order.filter(n => !spoke.has(n) && n !== seatNo);
+    const names = list => list.map(n => {
+        const s = seatAt(session, n);
+        return `${s.seat} 号 ${s.name}`;
+    }).join('、');
 
     return [
-        '【这一轮的发言秩序】天亮后按座号顺序依次发言，每人这一轮只说一次；出局的人不再发言、不再投票。',
+        `【这一轮的发言秩序】${speakOrderLine(session)}，每人这一轮只说一次；出局的人不再发言、不再投票。`,
         done.length
             ? `已经说过的：${names(done)}——他们这一轮不会再开口，你追着问也等不到回应；要压谁就直说，或者说明「下一轮要他讲清楚」。`
             : '你是这一轮第一个说的：前面还没人开口，不会有人当场接你的话，要等下一轮。',
@@ -531,8 +528,8 @@ function viewBlock(session, seatNo, record = null) {
         .filter(s => s.seat !== seatNo && s.kind !== 'npc' && s.characterId)
         .map(s => ({ id: s.characterId, name: s.name }));
     const knowledge = seat.kind === 'npc' ? '' : buildKnowledge(seat.characterId, others);
-    const myLabels = (session.aiLabels || {})[seatNo] || {};
-    const labelLine = Object.entries(myLabels).map(([s, t]) => `${s} 号=${t}`).join('、');
+    // 它自己那份判断表（读侧归一在引擎 labelsOf：老数据、不在这一桌词表里的标签都在那儿清掉）
+    const labelLine = labelLineOf(session, seatNo);
     // 笔记只读**它自己**那一份：狼队批量调用时，每只狼的块里只有它自己写过的东西
     const myNotes = (session.aiNotes || {})[seatNo] || [];
     // 手册：只装**它自己**点亮的条目（路人固定拿通用基础那一档，见 werewolfCodex）
@@ -575,7 +572,9 @@ function viewBlock(session, seatNo, record = null) {
         // 同一个座位能记住多少由它的悟性定（watchPlan），自己说的和当时盯着的人的话不砍
         publicFeed(session, { viewer: seatNo, tail: watchPlan(record).tail }),
         knowledge ? `\n【你对在场各人的了解】\n${knowledge}` : '',
-        labelLine ? `\n【你之前对他们的判断】\n${labelLine}` : '',
+        // 「之前」写在抬头里：这一块是**此前记下的一笔账**，不是这一轮定下的结论——
+        // 谁在它眼里变了就写新的盖掉，写 `取消` 就能把这个人划掉（用户 2026-09-14）
+        labelLine ? `\n【你之前对场上这些人的判断】（你此前一轮轮记下来的，随时可以改）\n${labelLine}` : '',
         myNotes.length
             ? `\n【你自己之前记的笔记】\n${myNotes.slice(-NOTES_IN_PROMPT).map(n => `- ${noteHead(n)}：${n.text}`).join('\n')}`
             : '',
@@ -590,21 +589,12 @@ function toneLine(type) {
 }
 
 /**
- * 角色扮演的通用头（每个对局内调用都用它做 systemPrompt 开头）。板子构成按实际板子生成。
- *
- * 「规则上不设警长」是**夹在阵容里的一个事实**，不是一条禁令：模型见到「12 人局」自带
- * 警长、警徽流那一套先验（用户 2026-09-13 实测它煞有介事地聊警徽流），只改规则页拦不住，
- * 每次调用都得让它知道这桌的实情。但别写成「不许提警长」——越强调越招它去聊，
- * 人也真会记错规则，偶尔说漏一句就随它去。措辞取「不设」而非「没有」：是规则设定，
- * 不是缺了什么（用户当天定）。
+ * 对局内 6 处调用共用的**唯一** system 头积木。
+ * 正文与措辞纪律都在 `roleHeadText`（werewolfRooms.js，纯函数、零 import、A 段整段测得到）——
+ * 要加东西加在那里，别在这个文件里拼字符串。这里只负责把模板库的同步缓存递进去。
  */
 function roleHead(session) {
-    const board = getBoard(session?.boardId);
-    return '你在扮演一个角色，正在玩一桌狼人杀（'
-        + `${boardProse(board.id)}，靠发言和投票找出狼人`
-        + (sheriffOf(board) ? '）。' : '；这一桌规则上不设警长）。')
-        + '完全以这个角色的人设说话，用第一人称，不要跳出角色；'
-        + '不要提到「AI」「模型」「提示词」「系统」，不要替别人说话，不要复述规则。';
+    return roleHeadText(session, cachedRuleTemplates());
 }
 
 /* ---- 发言 ---- */
@@ -655,7 +645,9 @@ export async function speakCharacter({ session, seatNo, type }) {
         '【判断】3号=狼人 5号=存疑',
         '【笔记】私下记的一句话',
         '【关注】3号 5号',
-        `（判断的标签只能用：${markTagsOf(session).join('、')}；笔记不会给别人看，是你自己的复盘素材；`
+        `（判断的标签只能用：${markTagsOf(session).join('、')}；这只是你自己记的一笔账，一个人一个标签——`
+        + '写到谁就是改他那一条、没写到的人维持原样，想撤掉对某个人的判断就写 `7号=取消`；'
+        + '笔记不会给别人看，是你自己的复盘素材；'
         + `【关注】是你接下来要重点盯的人——你只盯得住 ${cap} 个，没盯上的人说过的话你后面会渐渐记不清；`
         + '写座号或名字都行，**写了这一行就是重新定一张表、只留你写上的这几个，不写才维持你现在盯的人**）'
     ].join('\n');
@@ -666,7 +658,7 @@ export async function speakCharacter({ session, seatNo, type }) {
             temperature: 0.95,
             label: '狼人杀 · 一位发言'
         });
-        const parsed = parseSpeakReply(raw);
+        const parsed = parseSpeakReply(raw, session);
         if (!parsed.text) throw new Error('空回复');
         return { ...parsed, watch: watchSeats(parsed.watchText, session, seatNo, cap), degraded: false };
     } catch (e) {
@@ -694,10 +686,10 @@ export function watchSeats(line, session, seatNo, cap = Infinity) {
  * 返回 `watchText` 是**那一行的原文**（没写就是 null）：转成座号要这一桌的座位表，
  * 那是调用方的事（这里保持纯解析，照 parseMentions 在引擎里、解析在解析层的分工）。
  */
-export function parseSpeakReply(raw) {
+export function parseSpeakReply(raw, session = null) {
     const text = String(raw || '');
     const judge = text.match(/【判断】\s*([^\n]*)/);
-    const marks = parseMarks(judge?.[1] || '');
+    const marks = parseMarks(judge?.[1] || '', session);   // 词表跟着这一桌的板子走
     const note = String((text.match(/【笔记】\s*([^\n]*)/) || [])[1] || '').trim();
     const watch = text.match(/【关注】\s*([^\n]*)/);
     const body = text
@@ -760,29 +752,9 @@ export function parseLastWordsReply(raw) {
     return stripQuotes(String(raw || '').trim());
 }
 
-/*
- * 认标签的词表：角色那一半从 ROLE_META 现取（新加角色不用回来改这里），`好人`/`存疑` 不是角色，手写在后。
- * **解析是宽进的**：不按房间类型过滤——提示词只会给这一桌有的身份，这里多认几个只是防手滑。
- * 简写 `狼`/`民` 排在最后，别抢 `狼人`/`村民` 的先。
+/* 【判断】那一行的认法在引擎里（`parseMarks`，与 `parseWatchTargets` 同一个地方）：
+ * 词表、简写、撤掉的写法都只有那一份，别在这里再抄一套。
  */
-const MARK_LABELS = [...Object.values(ROLE_META).map(r => r.label), '好人', '存疑'];
-const MARK_RE_SRC = `(\\d{1,2})\\s*号?\\s*(?:=|＝|：|:|是|为|->|→)?\\s*(${[...MARK_LABELS, '狼', '民'].join('|')})`;
-
-/**
- * 「3号=狼人、5号存疑」→ { 3: '狼人', 5: '存疑' }
- * 只认预设标签（狼/民 这类简写归一到词表里的写法），认不出的整条丢掉。
- */
-export function parseMarks(text) {
-    const out = {};
-    const re = new RegExp(MARK_RE_SRC, 'g');   // 每次新起一个，免得 lastIndex 带着上一轮的游标
-    let m;
-    while ((m = re.exec(String(text || '')))) {
-        const seat = Number(m[1]);
-        if (seat < 1 || seat > 20) continue;
-        out[seat] = m[2] === '狼' ? '狼人' : (m[2] === '民' ? '村民' : m[2]);
-    }
-    return out;
-}
 
 /* ---- 投票 ---- */
 
@@ -814,8 +786,16 @@ export async function voteCharacter({ session, seatNo, type }) {
         // 刻意**不给限制**——用户明确「不需要完全要求真」，就是当轮的一个阶段性内心想法：
         // 犹豫、嘴硬、说错了都行，不必跟 reason 一致。加了「要真实」「别暴露身份」反而
         // 既毁掉味道，又把身份两个字塞到它眼前（同日「不设警长」那条教训）。
-        `（note、heart 与 marks 可省略；heart 就是你投完这一票时心里冒出来的那句话，一句就够，`
-        + `不必跟 reason 一个说法，也不需要多正确；marks 的标签只能用：${markTagsOf(session).join('、')}；`
+        // **长度也一样不给限制**（用户 2026-09-14 定）：原来写「一句就够」，现在按他说的
+        // 「根据每个角色的性格来走，从一句话到一长串都有可能；内容从游戏到投票到发言到场外
+        // 发散都有可能」——所以只**给范围**（写出来的是"可能是"），不写「可以写长一点」那种
+        // 叮嘱：叮嘱一样是往它眼前塞一个「长度」的念头。引擎那边同步去掉了 80 字硬截。
+        `（note、heart 与 marks 可省略；heart 就是你投完这一票时心里冒出来的那句话——`
+        + `多长看你这个人此刻是什么状态：可能就一句，也可能是一长串，这一票、场上这些人、`
+        + `谁刚说的那句话、甚至跟这一局没关系的什么，想到哪儿是哪儿；`
+        + `不必跟 reason 一个说法，也不需要多正确；marks 的标签只能用：${markTagsOf(session).join('、')}，`
+        + '那只是你自己记的一笔账，一个人一个标签——写到谁就是改他那一条、没写到的人维持原样，'
+        + '想撤掉对某个人的判断就把那一栏写成 null；'
         + `watch 是接下来你要重点盯的人——你只盯得住 ${cap} 个，没盯上的人说过的话你后面会渐渐记不清；`
         + '**写了这一栏就是重新定一张表、只留你写上的这几个，不写才维持你现在盯的人**）'
     ].join('\n');
@@ -826,7 +806,7 @@ export async function voteCharacter({ session, seatNo, type }) {
             temperature: 0.85,
             label: '狼人杀 · 一次投票'
         });
-        return { ...parseVoteReply(raw, legal, { cap }), degraded: false };
+        return { ...parseVoteReply(raw, legal, { cap, session }), degraded: false };
     } catch (e) {
         return { ...fallback, reason: e.message || String(e) };
     }
@@ -836,8 +816,10 @@ export async function voteCharacter({ session, seatNo, type }) {
  * 投票解析：JSON 优先，认不出就退到「投 N 号」的字面匹配，仍认不出算弃票。
  * `watch` 用与投票同一张白名单（活人、不含自己）；**没这个字段返回 undefined = 维持**。
  * `heart`（心声）不验收也不过滤：它不进任何提示词，写什么就是什么（见引擎 addHeart）。
+ * `marks` 那一栏**原样交给引擎的 mergeLabels** 归一（词表只有那一个门口）：JSON 里
+ * 写 null / 空串 = 撤掉，写数组（老写法）按最后一个算；认不出的整条丢掉。
  */
-export function parseVoteReply(raw, legal = [], { cap = Infinity } = {}) {
+export function parseVoteReply(raw, legal = [], { cap = Infinity, session = null } = {}) {
     const pickWatch = obj => {
         const list = Array.isArray(obj?.watch) ? obj.watch : null;
         if (!list) return undefined;
@@ -849,9 +831,7 @@ export function parseVoteReply(raw, legal = [], { cap = Infinity } = {}) {
         reason: String(obj?.reason || '').trim(),
         note: String(obj?.note || '').trim(),
         heart: String(obj?.heart || '').trim(),
-        marks: parseMarks(typeof obj?.marks === 'string'
-            ? obj.marks
-            : Object.entries(obj?.marks || {}).map(([s, t]) => `${s}号=${t}`).join(' ')),
+        marks: typeof obj?.marks === 'string' ? parseMarks(obj.marks, session) : (obj?.marks || {}),
         watch: pickWatch(obj)
     });
     const text = String(raw || '');
@@ -862,7 +842,7 @@ export function parseVoteReply(raw, legal = [], { cap = Infinity } = {}) {
     } catch { }
     const said = text.match(/(?:投|票给|出局)\s*(\d{1,2})\s*号/);
     const vote = said && legal.includes(Number(said[1])) ? Number(said[1]) : null;
-    return { vote, reason: stripQuotes(text.split('\n')[0] || ''), note: '', heart: '', marks: parseMarks(text) };
+    return { vote, reason: stripQuotes(text.split('\n')[0] || ''), note: '', heart: '', marks: parseMarks(text, session) };
 }
 
 /* ---- 夜晚：狼刀 / 验人 / 守人 / 用药 / 开枪 ---- */

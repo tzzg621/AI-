@@ -12,8 +12,9 @@ import { getAvatarHtml } from '../../store/ImageCache.js';
 import { esc } from '../../store/utils.js';
 import {
     ROOM_TYPES, getRoomType, getBoard, markTagsOf, buildRulesPage, roleLabel, randomNpcIdentity,
-    revealModeOf, revealLabel, tableColumnsOf, BOARDS
+    revealModeOf, revealLabel, tableColumnsOf, BOARDS, ruleTemplateIdsOf, ruleNoteOf
 } from './werewolfRooms.js';
+import { showConfirm } from '../../store/dialog.js';
 import * as store from './werewolfStore.js';
 import * as engine from './werewolfEngine.js';
 import * as ai from './werewolfAI.js';
@@ -98,6 +99,9 @@ export async function start(overlay, globalState, onBack) {
     };
     document.addEventListener('click', app.backHandler, true);
 
+    // 做法约定的模板库读一次进缓存：提示词组装（roleHead → roleHeadText）是同步的，
+    // 必须在任何一次 AI 调用之前就位；读不动时它自己认空库，不影响开局。
+    await store.ensureRuleTemplates();
     await store.seedRoomTypes(ROOM_TYPES);
     await refreshTables(app);
     await refreshMe(app);
@@ -129,9 +133,12 @@ async function leaveSubPage(app, close) {
         return;
     }
     if (page.name === 'room' && !app.readonly) {
-        // 散桌：准备态里一个人都没坐、也没有在飞邀请时，就别留着这张空桌
+        // 散桌：准备态里一个人都没坐、也没有在飞邀请时，就别留着这张空桌。
+        // **只散自己开的**（hostId）——2026-09-14 起准备中的桌谁都能进去坐，
+        // 不加这一道，路过看一眼别人的空桌再退出去就会把它删了。
         const s = app.session;
-        if (s && s.status === 'forming' && !(s.seats || []).length && !Object.keys(s.reservations || {}).length) {
+        if (s && s.status === 'forming' && s.hostId === app.me
+            && !(s.seats || []).length && !Object.keys(s.reservations || {}).length) {
             await store.deleteSession(s.id);
             app.session = null;
         }
@@ -395,18 +402,27 @@ function renderTopbar(app) {
     }
 
     const canGiveUp = (name === 'room' || name === 'table') && !app.readonly;
-    const rightBtn = canGiveUp
-        ? `<button id="wwGiveUp" aria-label="${name === 'table' ? '流局' : '放弃'}">✕</button>`
-        : (isRoot ? `<button id="wwAbout" aria-label="说明">?</button>` : `<span style="width:34px"></span>`);
+    // 「这一桌的做法约定」入口：准备页与对局页都有，但只在还打得动的局里出现——
+    // 打完/流局的局 mutateSession 一律拒收（ACTIVE_STATUS），别摆一个按了不生效的按钮；
+    // 旁观局 app.readonly，天然不出现。
+    const canRules = (name === 'room' || name === 'table') && !app.readonly && !isOver(app.session);
+    const rightBtns = [
+        canRules ? '<button id="wwRulesBtn" aria-label="这一桌的做法约定">📜</button>' : '',
+        canGiveUp
+            ? `<button id="wwGiveUp" aria-label="${name === 'table' ? '流局' : '放弃'}">✕</button>`
+            : (isRoot ? `<button id="wwAbout" aria-label="说明">?</button>` : '')
+    ].filter(Boolean).join('');
 
+    // 两侧各自包一层等宽容器：.ww-topbar 是 space-between，右边多一个按钮而左边还是一个，
+    // 标题就会被挤偏 20px（.ww-topbar-l/-r 的 min-width 是 CSS 里那道配重）
     return `
         <header class="ww-topbar">
-            <button id="wwBack" aria-label="返回">‹</button>
+            <div class="ww-topbar-l"><button id="wwBack" aria-label="返回">‹</button></div>
             <div class="ww-brand">
                 <small>${subtitle}</small>
                 <strong>${esc(title)}</strong>
             </div>
-            ${rightBtn}
+            <div class="ww-topbar-r">${rightBtns}</div>
         </header>
     `;
 }
@@ -562,8 +578,11 @@ function renderTableCard(app, session) {
     let action, pill, cls = '';
     if (session.status === 'forming') {
         pill = `<span class="ww-pill muted">准备中</span>`;
-        action = mine ? '继续准备' : (seated ? '旁观' : '空桌');
-        cls = mine ? '' : 'is-quiet';
+        // 卡片上写的就是进去之后能做的事：自己开的写「继续准备」，还有空位、你自己也没被
+        // 别的局锁住就写「去坐下」（见 enterTable 的 readonly 口径），其余才是「旁观」
+        const canJoin = !mine && !app.lockedSession && freeSeats(session, board).length > 0;
+        action = mine ? '继续准备' : (canJoin ? '去坐下' : '旁观');
+        cls = mine || canJoin ? '' : 'is-quiet';
     } else if (session.status === 'ended' || session.status === 'voided') {
         // 打完的桌不回牌桌，回桌边——就地复盘那一摊
         const over = session.status === 'ended'
@@ -669,18 +688,22 @@ function renderHandbookCard() {
 
 /**
  * 一条条目：点亮的给正文，没点亮的**只给标题 + 点亮条件**（用户 2026-09-12 定的口径）。
- * 判定与注入提示词用的是同一个 isLit，所以「手册上亮着的」=「他真拿得到的」。
+ * 判定与注入提示词用的是同一个 isLit，所以「手册上亮着的」=「他真拿得到的」；
+ * 正文也同源（`entryTextOf`）——亮着的那条就是他这一档看得到的深浅。还没够着的层**不剧透正文**，
+ * 只报一句差什么（`deepLockText`）。
  */
 function renderEntry(entry, record) {
     const lit = codex.isLit(entry, record);
     const cond = lit ? '' : codex.condText(entry.cond);
+    const deep = lit ? codex.deepLockText(entry, record) : '';
     return `
         <div class="ww-entry ${lit ? '' : 'is-locked'}">
             <div class="ww-entry-head">
                 <strong>${esc(entry.title)}</strong>
                 <span class="ww-entry-tier">${esc(codex.ENTRY_TIER_LABEL[entry.tier] || '')}</span>
             </div>
-            ${lit ? `<p>${esc(entry.text)}</p>` : `<p class="ww-entry-cond">🔒 ${esc(cond || '还没点亮')}</p>`}
+            ${lit ? `<p>${esc(codex.entryTextOf(entry, record))}</p>` : `<p class="ww-entry-cond">🔒 ${esc(cond || '还没点亮')}</p>`}
+            ${deep ? `<p class="ww-entry-cond">🔒 再往下：${esc(deep)}</p>` : ''}
         </div>
     `;
 }
@@ -762,6 +785,8 @@ function renderRoom(app) {
         <div class="ww-seats ${board.columns === 1 ? 'single' : ''}">
             ${seats.join('')}
         </div>
+
+        ${app.readonly ? renderLockNote(app, session.typeId) : ''}
 
         <div class="ww-section-title"><strong>房间动态</strong><span>${esc([
             mine ? `你坐在 ${mine.seat} 号` : '还没落座',
@@ -1022,10 +1047,10 @@ function renderTableSeat(app, session, seat, mine, over) {
     const isMe = !!mine && seat.seat === mine.seat;
     const dead = seat.alive === false;
     const role = visibleRoleOf(app, session, seat);
-    const marks = (session.marks || {})[seat.seat] || [];
+    const mark = myMarkOf(session, seat.seat);
     const tags = [
         role ? `<span class="ww-pill ${seat.role === 'werewolf' ? 'wolf' : 'good'}">${esc(role)}</span>` : '',
-        ...marks.map(t => `<span class="ww-pill muted">${esc(t)}</span>`)
+        mark ? `<span class="ww-pill muted">${esc(mark)}</span>` : ''
     ].filter(Boolean).join('');
     // 标记只服务代笔，旁观者用不上；自己也不需要给自己贴
     const canMark = !over && !app.readonly && !isMe;
@@ -1662,7 +1687,7 @@ function speakTurn(app, close, seatNo, type) {
     return runTurn(app, close, {
         call: s => ai.speakCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
-            ai.mergeLabels(s, seatNo, res?.marks || {});
+            engine.mergeLabels(s, seatNo, res?.marks || {});
             engine.addNote(s,seatNo, { kind: 'speak', text: res?.note });
             // 关注表：这次改了就换，没写就维持（res.watch 是 undefined，不是空数组）
             if (res?.watch) engine.setWatch(s, seatNo, res.watch);
@@ -1700,7 +1725,7 @@ function voteTurn(app, close, seatNo, type) {
     return runTurn(app, close, {
         call: s => ai.voteCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
-            ai.mergeLabels(s, seatNo, res?.marks || {});
+            engine.mergeLabels(s, seatNo, res?.marks || {});
             engine.addNote(s,seatNo, { kind: 'vote', text: res?.note });
             // 心声：这一票的副产物，只写不读（留给以后的道具，用户 2026-09-13 定）。
             // 主视角把这一票交给 AI 时走的是同一个入口，同样记上；kind 跟「代笔」那一路一致
@@ -2103,20 +2128,29 @@ async function leaveTable(app, close) {
 }
 
 /**
- * 主视角的标记（{ 座号: [标签] }）→ 代笔提示词要的 { 座号: '标签·标签' }。
- * 同一个人可以贴多个标签；单标签的写法也认（兼容老数据）。
+ * 主视角给某个人贴的那个标签（`session.marks` 里一个人只有一个：能改、能撤，不能多贴，
+ * 与 AI 那份判断表同一套口径，见引擎 mergeLabels）。
+ * 老数据是数组（那时候可以多贴）：读的时候按**最后一个**算——只读归一，不迁移、不回写。
  */
+function myMarkOf(session, seatNo) {
+    const v = (session?.marks || {})[seatNo];
+    if (Array.isArray(v)) return String(v[v.length - 1] || '');
+    return v ? String(v) : '';
+}
+
+/** 主视角的标记 → 代笔提示词要的 { 座号: '标签' }（认不出的位置直接不出现） */
 function marksForPrompt(marks) {
     const out = {};
-    for (const [seat, list] of Object.entries(marks || {})) {
-        if (Array.isArray(list) && list.length) out[seat] = list.join('·');
-        else if (typeof list === 'string' && list) out[seat] = list;
+    for (const [seat, v] of Object.entries(marks || {})) {
+        const tag = Array.isArray(v) ? v[v.length - 1] : v;
+        if (tag) out[seat] = String(tag);
     }
     return out;
 }
 
 /**
  * 贴标记：只在代笔那一次调用里起作用，不进任何 AI 角色的提示词。
+ * **一个人一个标签**（点一个就换成它；再点已选中的那个＝撤掉）——词表跟着这一桌的板子走。
  * 面板自己刷新，不走整页重渲染（重渲染会把弹窗一起抹掉）。
  */
 function openMarkPanel(app, close, seatNo) {
@@ -2128,23 +2162,22 @@ function openMarkPanel(app, close, seatNo) {
 
     modal(app, {
         title: `给 ${seat.seat} 号 ${seat.name} 贴标记`,
-        sub: '只有你自己看得到，也只在这一局里有效；代笔时 AI 会顺着它写。',
+        sub: '只有你自己看得到，也只在这一局里有效；一个人一个标签，再点一下已选中的那个就撤掉。代笔时 AI 会顺着它写。',
         bodyHtml: `<div class="ww-mark-row" id="wwMarkRow"></div>`,
         onMount: mask => {
             const row = mask.querySelector('#wwMarkRow');
             const paint = () => {
-                const cur = (app.session?.marks || {})[seatNo] || [];
+                const cur = myMarkOf(app.session, seatNo);
                 row.innerHTML = markTagsOf(session).map(t => `
-                    <button class="ww-mark-chip ${cur.includes(t) ? 'active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>
+                    <button class="ww-mark-chip ${cur === t ? 'active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>
                 `).join('');
                 row.querySelectorAll('.ww-mark-chip').forEach(btn => {
                     btn.addEventListener('click', async () => {
                         const tag = btn.dataset.tag;
                         await mutateSession(app, session.id, s => {
                             const all = { ...(s.marks || {}) };
-                            const list = all[seatNo] || [];
-                            all[seatNo] = list.includes(tag) ? list.filter(x => x !== tag) : [...list, tag];
-                            if (!all[seatNo].length) delete all[seatNo];
+                            const had = myMarkOf(s, seatNo) === tag;   // 就是现在点着的那个 ⇒ 撤掉
+                            if (had) delete all[seatNo]; else all[seatNo] = tag;
                             s.marks = all;
                             return true;
                         });
@@ -2152,6 +2185,178 @@ function openMarkPanel(app, close, seatNo) {
                     });
                 });
             };
+            paint();
+        }
+    });
+}
+
+/* ---------------- 这一桌的做法约定（作者自定义的规则提示词） ----------------
+ * 模板库是**全局**的（一份模板，各桌勾选引用），桌只存「勾了哪几条 + 自己写的一段」。
+ * 所以在这里改一条模板，所有勾了它的桌（含正在打的）下一次调用就是新文字——这是用户要的语义，
+ * 与「建桌时复制一份快照」正相反。正文怎么拼进提示词全在 werewolfRooms.tableRulesBlock。
+ *
+ * 界面照「世界词典 / 世界书」那个形状来，但用的是狼人杀自己的零件：一张模板一张卡（.ww-entry），
+ * 卡上名字 + 正文，选中与否用手册那套 is-locked 压暗表示；新建与改都在原位（卡即编辑器），
+ * 删除收进编辑态（平时列表上只挂一枚低调的 ✎）。两块内容用 .ww-section-title 分开，
+ * 右侧那行小字写清各自的生效范围。
+ *
+ * **重绘一律走局部 paint()，绝不 renderApp**——那会把还挂着的弹层一起抹掉（同 openMarkPanel）。
+ * 同一时刻只有一张卡在编辑态，所以编辑态里那几个单例选择器不会撞车。
+ */
+async function openRulesPanel(app, close) {
+    const session = app.session;
+    if (!session || app.readonly || isOver(session)) return;
+    await store.ensureRuleTemplates();   // 一路都是热的，这里只是别让面板读到空缓存
+
+    let checked = [...ruleTemplateIdsOf(session)];   // 勾了哪几条（按「保存」才落库）
+    let note = ruleNoteOf(session);                  // 自己写的那段（同上）
+    let editingId = null;   // 哪张卡在编辑态（null = 都收着）
+    let draft = null;       // 正在新建的那张：还没进库，保存时才 append
+
+    // 保存要读输入框的值：modal 的按钮是**先关弹层再 await run()**，那会儿 mask 已经摘掉、
+    // 查不到任何元素了，所以在 onMount 里把元素本身抓进闭包（元素脱离了文档，.value 照样读得到）
+    let noteEl = null;
+    let countEl = null;
+
+    modal(app, {
+        title: '这一桌的做法约定',
+        sub: 'AI 每次开口都会看到：这桌勾的模板 + 你写的那段。勾选与这段文字按「保存」生效；'
+            + '模板的增删改是立刻存的，对所有桌一样。',
+        bodyHtml: `
+            <div class="ww-section-title"><strong>做法模板</strong><span>勾了的才进这一桌</span></div>
+            <div id="wwRuleList"></div>
+            <button class="ww-btn ghost block" id="wwRuleNew">＋ 新建模板</button>
+            <div class="ww-section-title"><strong>自己写的</strong><span>只这一桌，接在模板后面</span></div>
+            <textarea class="ww-input" id="wwRuleNote" placeholder="留空也行：只勾模板就够用">${esc(note)}</textarea>
+            <div class="ww-rule-count" id="wwRuleCount"></div>
+        `,
+        actions: [{
+            label: '保存',
+            run: async () => {
+                const text = noteEl ? noteEl.value : note;
+                const ok = await mutateSession(app, session.id, s => {
+                    s.ruleNote = text;
+                    s.ruleTemplateIds = [...checked];
+                    return true;
+                });
+                renderApp(app, close);
+                toast(app, ok ? '这一桌的做法记住了' : '这一局已经结束了，没能存下');
+            }
+        }],
+        onMount: mask => {
+            const listEl = mask.querySelector('#wwRuleList');
+            const newBtn = mask.querySelector('#wwRuleNew');
+            noteEl = mask.querySelector('#wwRuleNote');
+            countEl = mask.querySelector('#wwRuleCount');
+
+            // 这段每个对局内调用都要带一次，字数值得让作者看得见（不设上限，只是显示）
+            const syncCount = () => { countEl.textContent = `已写 ${noteEl.value.length} 字`; };
+            noteEl.addEventListener('input', syncCount);
+            syncCount();
+
+            // 一张卡：编辑态是一张能改的卡，平时是一张点了就勾上/取消的卡
+            const cardHtml = t => {
+                const on = checked.includes(t.id);
+                if (editingId === t.id) {
+                    return `
+                        <div class="ww-entry ww-rule-tpl is-editing" data-id="${esc(t.id)}">
+                            <div class="ww-entry-head">
+                                <input class="ww-input ww-note ww-rule-name" value="${esc(t.name)}" placeholder="这条叫什么">
+                                <button class="ww-rule-icon ww-rule-close" aria-label="收起">✕</button>
+                            </div>
+                            <textarea class="ww-input ww-rule-text" placeholder="想让 AI 怎么做？比如：两三句说完，别写小作文">${esc(t.text)}</textarea>
+                            <div class="ww-rule-actions">
+                                <button class="ww-small-button ww-rule-save">保存</button>
+                                <button class="ww-small-button ghost ww-rule-cancel">取消</button>
+                                <button class="ww-small-button ghost ww-rule-del">删除</button>
+                            </div>
+                        </div>
+                    `;
+                }
+                return `
+                    <div class="ww-entry ww-rule-tpl ${on ? '' : 'is-locked'}" role="button" tabindex="0" data-id="${esc(t.id)}">
+                        <div class="ww-entry-head">
+                            <strong>${esc(t.name || '未命名')}</strong>
+                            <span class="ww-pill ${on ? 'good' : 'muted'}">${on ? '已选中' : '未选中'}</span>
+                            <button class="ww-rule-icon" data-edit="1" aria-label="改这条">✎</button>
+                        </div>
+                        <p>${esc(t.text || '（还没写内容）')}</p>
+                    </div>
+                `;
+            };
+
+            const closeCard = () => { editingId = null; draft = null; paint(); };
+
+            const saveCard = async () => {
+                const name = listEl.querySelector('.ww-rule-name')?.value.trim() || '';
+                const text = listEl.querySelector('.ww-rule-text')?.value || '';
+                if (!name && !text.trim()) { toast(app, '写点内容再保存'); return; }
+                const all = store.cachedRuleTemplates();
+                const next = draft && draft.id === editingId
+                    ? [...all, { id: editingId, name, text }]
+                    : all.map(t => (t.id === editingId ? { ...t, name, text } : t));
+                await store.saveRuleTemplates(next);   // 模板立刻存：它是全局的，改完对新老各桌一起生效
+                closeCard();
+            };
+
+            const delCard = async id => {
+                const t = store.cachedRuleTemplates().find(x => x.id === id);
+                if (!t) { closeCard(); return; }   // 草稿本来就没进库，删除＝取消
+                const yes = await showConfirm(`删掉模板「${t.name || '未命名'}」？所有勾了它的桌都会少这一条。`);
+                if (!yes) return;
+                await store.saveRuleTemplates(store.cachedRuleTemplates().filter(x => x.id !== id));
+                // 各桌 ruleTemplateIds 里那个 id 留着不管：读侧 find 不到就跳过（见 werewolfRooms）
+                closeCard();
+            };
+
+            const bindCards = () => {
+                listEl.querySelectorAll('.ww-rule-tpl[data-id]').forEach(card => {
+                    const id = card.dataset.id;
+                    if (editingId === id) {
+                        card.querySelector('.ww-rule-save').addEventListener('click', saveCard);
+                        card.querySelector('.ww-rule-cancel').addEventListener('click', closeCard);
+                        card.querySelector('.ww-rule-close').addEventListener('click', closeCard);
+                        card.querySelector('.ww-rule-del').addEventListener('click', () => delCard(id));
+                        // 新建的先填名字，改已有的多半是改正文
+                        card.querySelector(draft && draft.id === id ? '.ww-rule-name' : '.ww-rule-text')?.focus();
+                        return;
+                    }
+                    const toggle = () => {
+                        checked = checked.includes(id) ? checked.filter(x => x !== id) : [...checked, id];
+                        paint();
+                    };
+                    // ✎ 别顺手把卡也切了（它长在可点的卡里面）
+                    card.querySelector('[data-edit]').addEventListener('click', ev => {
+                        ev.stopPropagation();
+                        editingId = id;
+                        paint();
+                    });
+                    card.addEventListener('click', toggle);
+                    card.addEventListener('keydown', ev => {
+                        // ✎ 自己有一套键盘行为：回车落在它身上不该顺手把这张卡也切了
+                        if (ev.target !== card) return;
+                        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
+                    });
+                });
+            };
+
+            const paint = () => {
+                const all = store.cachedRuleTemplates();
+                // 空库起步，不预置任何模板（用户定）：给一句话说清这地方是干什么的
+                listEl.innerHTML = (!all.length && !draft)
+                    ? '<div class="ww-empty">还没有模板。把常用的做法写成一条，以后每一桌都能勾它。</div>'
+                    : [...all, ...(draft ? [draft] : [])].map(cardHtml).join('');
+                newBtn.disabled = !!draft;
+                bindCards();
+            };
+
+            newBtn.addEventListener('click', () => {
+                if (draft) return;
+                draft = { id: store.newTemplateId(), name: '', text: '' };
+                editingId = draft.id;
+                paint();
+            });
+
             paint();
         }
     });
@@ -2197,14 +2402,23 @@ async function openHeart(app, seatNo, round) {
         bodyHtml: '<div class="ww-heart-hint">投那一票那一刻没说出口的一句话。</div>',
         actions: [{
             label: `花 ${store.HEART_COST} 钻石看`,
-            run: async () => {
+            // 就地换成正文，**不关掉再开一个**：扣钻要两趟 IDB（读档案 + 写档案），关→开中间
+            // 那一段遮罩整块不在（含 4px 背板模糊）⇒ 整张牌桌闪一下（用户 2026-09-14 报的）。
+            keepOpen: true,
+            run: async mask => {
+                const pay = mask.querySelector('.ww-choice');
+                pay.disabled = true;              // 等库的这段时间别让人点第二下
                 const left = await store.spendCoins(app.me, store.HEART_COST);
-                if (left === null) return toast(app, '钻石不够了');
-                modal(app, {
-                    title: `${who}的心声`,
-                    sub: `花掉 ${store.HEART_COST} 钻石 · 还剩 ${left} 颗`,
-                    bodyHtml: `<div class="ww-heart-text">${esc(text)}</div>`
-                });
+                if (left === null) {
+                    pay.disabled = false;
+                    return toast(app, '钻石不够了');
+                }
+                const box = mask.querySelector('.ww-modal');
+                box.innerHTML = `<h3>${esc(`${who}的心声`)}</h3>`
+                    + `<p class="ww-modal-sub">花掉 ${store.HEART_COST} 钻石 · 还剩 ${left} 颗</p>`
+                    + `<div class="ww-heart-text">${esc(text)}</div>`
+                    + '<button class="ww-modal-close">知道了</button>';
+                box.querySelector('.ww-modal-close').addEventListener('click', () => mask.remove());
             }
         }]
     });
@@ -2219,6 +2433,8 @@ function bindApp(app, close) {
     root.querySelector('#wwAbout')?.addEventListener('click',
         () => toast(app, `狼人杀 · ${Object.values(BOARDS).map(b => b.label).join(' / ')}`));
     root.querySelector('#wwGiveUp')?.addEventListener('click', () => confirmGiveUp(app, close));
+    // 这一桌的做法约定：只有准备页/对局页、且这一局还打得动时才有这个按钮（见 renderTopbar）
+    root.querySelector('#wwRulesBtn')?.addEventListener('click', () => openRulesPanel(app, close));
 
     root.querySelectorAll('.ww-tab').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -2327,7 +2543,14 @@ async function enterTable(app, close, sessionId) {
         || (app.recentEnded || []).find(s => s.id === sessionId);
     if (!existing) { toast(app, '这一桌不在了'); return; }
     app.session = existing;
-    app.readonly = !iAmIn(existing, app);
+    // 准备中的桌**能进去就能坐**（用户 2026-09-14 问的：「不在任何对局中的主视角角色，
+    // 应该可以加入准备中还有空位的其他对局吧」）：只要没被别的局锁住，空位就是可点的，
+    // 底栏写「先坐下」，坐下之后一切照旧。换成别的角色当主视角、或自己那张桌站起来之后
+    // 再回来，走的都是这一条。
+    // 「旁观」只剩两种人：这一局已经打起来了（进不去），以及**已经被别的局锁住**的人（坐不下）。
+    app.readonly = existing.status === 'forming'
+        ? !!(app.lockedSession && app.lockedSession.id !== existing.id)
+        : !iAmIn(existing, app);
     resetTransient(app);
     // 记住是从哪一页点进来的：首页那列「最近结束」不挂在房型页上，退出去得还回首页
     const from = app.page?.name || null;
@@ -2364,6 +2587,11 @@ async function openTable(app, close, typeId) {
         boardId: getBoard(type.boardId).id,
         // 出局信息公开方式跟着房型走（新手局明牌，速战/扮演暗牌）；存进本局，记录自带当时的规则
         revealMode: type.reveal || 'hidden',
+        // 这一桌的做法约定：只记「勾了哪几条模板 + 自己写的一段」，正文在全局模板库里现取——
+        // 是**引用**不是快照，所以改一条模板对老桌（含正在打的）也生效（用户定）。
+        // 老记录缺这两个字段由读侧兜底（ruleTemplateIdsOf / ruleNoteOf）
+        ruleTemplateIds: [],
+        ruleNote: '',
         status: 'forming',
         hostId: app.me,
         createdAt: Date.now(),
@@ -2503,7 +2731,9 @@ function avatarHtml(id, name) {
 }
 
 function openInvitePanel(app, close) {
-    if (app.busy || app.readonly || !app.session) return;
+    // 与 runInvite / runMatch / runStart 同一个口径：**坐下来的人**才谈得上请人
+    // （底栏那颗按钮本来就没坐下时是灰的，这里是第二道）
+    if (app.busy || app.readonly || !app.session || !iAmIn(app.session, app)) return;
     const session = app.session;
     const board = getBoard(getRoomType(session.typeId)?.boardId);
 
@@ -2820,8 +3050,13 @@ function modal(app, { title, sub = '', bodyHtml = '', actions = [], onMount = nu
     app.root.appendChild(mask);
     mask.querySelectorAll('.ww-choice[data-i]').forEach(btn => {
         btn.addEventListener('click', async () => {
-            mask.remove();
-            await actions[Number(btn.dataset.i)]?.run?.();
+            const a = actions[Number(btn.dataset.i)];
+            // 默认「先关弹层、再跑 run」：所以 run 里再去 querySelector 是抓不到的——要用的值
+            // 一律在 onMount 里先收进闭包。**标了 keepOpen 的按钮例外**：弹层不关，run 拿到
+            // mask 自己把内容换掉（同一块面板就地翻页）。要它是因为「关掉再开一个」中间那段
+            // 遮罩整块不在（含背板模糊）⇒ 底下整页会闪一下，见 openHeart。
+            if (!a?.keepOpen) mask.remove();
+            await a?.run?.(mask);
         });
     });
     mask.querySelector('.ww-modal-close').addEventListener('click', () => mask.remove());

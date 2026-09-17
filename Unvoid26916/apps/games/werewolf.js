@@ -4,7 +4,8 @@
 // - 规则引擎在 werewolfEngine.js（纯函数），AI 在 werewolfAI.js，存储 in werewolfStore.js。
 // - 一局 = 一张 6 人板子；座位上的都是真实角色（路人临时补齐，只进路人池）。
 // - 无上帝视角：每次 AI 调用只喂一个角色的视角。
-// - 推进方式：玩家点一下走一步，不做全自动。
+// - 推进方式：玩家点一下走一步。**投票阶段可以交给半自动**（桌内顶栏那个圆形钮，默认关闭）：
+//   进了投票阶段就按座位顺序一座一座问票，主视角那一座留着（自己投，或者点「让 AI 代投」）。
 
 import { getActiveCharacterId, CharacterStore } from '../../store/CharacterStore.js';
 import { getAllCharacterIds, getCharacterNameById } from '../characterManager.js';
@@ -12,7 +13,8 @@ import { getAvatarHtml } from '../../store/ImageCache.js';
 import { esc } from '../../store/utils.js';
 import {
     ROOM_TYPES, getRoomType, getBoard, markTagsOf, markShortOf, buildRulesPage, roleLabel, randomNpcIdentity,
-    revealModeOf, revealLabel, tableColumnsOf, BOARDS, ruleTemplateIdsOf, ruleNoteOf
+    revealModeOf, revealLabel, tableColumnsOf, BOARDS, ruleTemplateIdsOf, ruleNoteOf,
+    AUTO_MODE_KEY, AUTO_DEFAULT, autoModeOf, autoModeMeta
 } from './werewolfRooms.js';
 import { showConfirm } from '../../store/dialog.js';
 import * as store from './werewolfStore.js';
@@ -80,12 +82,14 @@ export async function start(overlay, globalState, onBack) {
             picker: null        // @ 候选项（只在内存里，跟着输入框光标走）
         },
         reviewChain: Promise.resolve(),   // 复盘消息的写队列：落库是「读-改-写」，必须串起来
+        autoVote: null,                   // 半自动正在跑的那一轮（null = 没在跑；`mine` = 我这一票也交给它了）
         closed: false
     };
 
     const close = () => {
         if (app.closed) return;
         app.closed = true;
+        app.autoVote = null;              // 关了就不再有下一座：循环每一轮开头都会查它
         clearReviewTimers(app);           // 关掉整个模块 = 退出房间：不再触发任何新调用
         document.removeEventListener('click', app.backHandler, true);
         root.remove();
@@ -195,11 +199,41 @@ function iAmIn(session, app) {
     return (session?.participantIds || []).includes(app.me);
 }
 
+/* 落库的写队列：局 id -> 这一条的队尾（见 mutateSession）。
+   放在模块级、按局各记一条，是因为 `app` 每次进模块都会重建——挂在 app 上，
+   「退出模块前还在飞的那一笔」与「回来之后写的那一笔」会各排各的队，照样叠上。 */
+const writeChains = new Map();
+
+/**
+ * 落库的唯一入口：改动前重读库里那一局、改完整条存回去（三步都在 mutateSessionNow 里）。
+ * 这里多一道**排队**，只为让这三步不会两笔叠在一起。
+ *
+ * 不排队会丢东西，因为存的是**整条记录**：A 读到旧记录、B 也读到同一份旧记录，
+ * A 存（带 A 的改动）、B 存（带 B 的改动，可 B 手里那份里没有 A 的改动）⇒ A 那一笔没了。
+ * 半自动放开之后这一幕是真会发生的：AI 回话落库的那一瞬，玩家正好点了自己那一票。
+ *
+ * 排队只压这一小段（重读到存完，几毫秒），**不压 AI 请求**（几秒）：玩家点自己那一票
+ * 不必等 AI 回话，只是落地那一下排在队尾——要的就是「AI 没返回时我也能投」。
+ *
+ * 存进表里的那条一律是 catch 过的：一笔写失败不该把这条队列变成坏掉的链、拖着后面全不动。
+ * 调用方拿到的返回值与以前一样（该 await 的照旧 await，该判成功没有的照旧判）。
+ */
+function mutateSession(app, sessionId, mutator) {
+    const run = () => mutateSessionNow(app, sessionId, mutator);
+    // 接在上一笔后面：上一笔存完了，这一笔才开始重读，于是读到的必是带前一笔改动的新记录
+    const tail = (writeChains.get(sessionId) || Promise.resolve()).then(run);
+    const settled = tail.catch(() => {});
+    writeChains.set(sessionId, settled);
+    // 这一笔落地就把这一局的账收掉（表不长生）；后面还有人排队的话，下一个队尾自己会收
+    settled.then(() => { if (writeChains.get(sessionId) === settled) writeChains.delete(sessionId); });
+    return tail;
+}
+
 /**
  * 读改写：改动前重读一遍库里的这一局，避免旧的异步结果覆盖新状态
  * （照 textAdventure 的 roundId 比对思路，这里是每次重读 + 落库前判活）
  */
-async function mutateSession(app, sessionId, mutator) {
+async function mutateSessionNow(app, sessionId, mutator) {
     const fresh = await store.getSession(sessionId);
     if (!fresh || !store.ACTIVE_STATUS.includes(fresh.status)) return null;
     const out = await mutator(fresh);
@@ -448,8 +482,18 @@ function renderTopbar(app) {
     // 打完/流局的局 mutateSession 一律拒收（ACTIVE_STATUS），别摆一个按了不生效的按钮；
     // 旁观局 app.readonly，天然不出现。
     const canRules = (name === 'room' || name === 'table') && !app.readonly && !isOver(app.session);
+    // 自动推进那一档：**只有桌内两页挂它**（准备页 + 对局页，与 📜 同一个口径）。值本身仍然是
+    // 模块级的（localStorage 的 `global_werewolf_auto`）——用户 2026-09-17 问「在桌内设置不能将
+    // 配置写入跨桌吗？」，能：画在哪跟存哪是两件事，桌内设置、跨桌生效。
+    // 图标不用 emoji：一个圆 + 中间一道分割线（CSS 画的，见 .ww-auto-dot）——左半点亮＝半自动
+    // （今天只有这一档会亮）、全亮留给还没做出来的全自动、只描边＝关闭。
+    const autoCur = autoMode();
+    const canAuto = (name === 'room' || name === 'table') && !app.readonly && !isOver(app.session);
     const rightBtns = [
         canRules ? '<button id="wwRulesBtn" aria-label="这一桌的做法约定">📜</button>' : '',
+        canAuto
+            ? `<button id="wwAutoBtn" data-auto="${autoCur}" aria-label="自动推进：${autoModeMeta(autoCur).name}"><i class="ww-auto-dot"></i></button>`
+            : '',
         canGiveUp
             ? `<button id="wwGiveUp" aria-label="${name === 'table' ? '流局' : '放弃'}">✕</button>`
             : (isRoot ? `<button id="wwAbout" aria-label="说明">?</button>` : '')
@@ -760,8 +804,10 @@ function renderEntry(entry, record) {
  * 手册 = 阵营（狼 / 好人 / 两边通用）→ 组（狼人 / 预言家 / 女巫…）→ 条目，最后是各房型的完整规则。
  *
  * 分组轴是**纯组织轴**（用户 2026-09-16 定）：它只决定这一页怎么归类，
- * **注入侧一个字不读它**——筛选继续走现成的 cond + scope + 额度（全桌都注入、不排序）。
- * 所以「手册上亮着的」=「他真拿得到的」这条口径没变，还是同一个 isLit。
+ * **注入侧一个字不读它**——筛选继续走现成的 cond + scope（全桌都注入、不排序）。
+ * 这一页的亮用的是**角色级**的 `isLit`（他解锁了什么，与今天坐哪张桌无关）；
+ * 注入那一份是它再过一遍筛选。两者**允许不等**（用户 2026-09-17：不等的地方（注入的地方）
+ * 是由房型筛选产生的），所以角色这一侧不需要再另做一份整理。
  *
  * 房型的「完整规则」仍走 buildRulesPage（规则正文的唯一出处），这里只摆入口卡，不重复写规则。
  */
@@ -1010,17 +1056,17 @@ function visibleRoleOf(app, session, seat) {
     return '';
 }
 
-/** 该谁动了（高亮用）；夜里是谁在行动是秘密，不标 */
+/**
+ * 该谁动了；夜里是谁在行动是秘密，不标。
+ * **发言的那四拍不从这儿出**（`day_speak` / `day_pk` / 上警发言 / 竞选平票加说一轮）——
+ * 那几拍的高亮是「你刚叫起来的那一位」，见 `calledSeatOf`。
+ */
 function actingSeat(session) {
     if (session?.status !== 'ongoing') return null;
-    if (session.phase === 'day_speak') return engine.currentSpeaker(session)?.seat ?? null;
-    if (session.phase === 'day_pk') return engine.currentPkSpeaker(session)?.seat ?? null;
     if (session.phase === 'day_vote') return engine.currentVoter(session)?.seat ?? null;
     if (session.phase === 'day_pk_vote') return engine.currentPkVoter(session)?.seat ?? null;
-    // 竞选那条链：表态与投票都是**静默**的（轮到谁就高亮谁），警上发言是当众说的
+    // 竞选那条链：表态与两轮投票都是**静默**的（流水里没有逐座的话可读，高亮就是进度本身）
     if (session.phase === 'day_sheriff_signup') return engine.currentSheriffSignup(session)?.seat ?? null;
-    if (session.phase === 'day_sheriff_speak') return engine.currentSheriffSpeaker(session)?.seat ?? null;
-    if (session.phase === 'day_sheriff_pk') return engine.currentSheriffPkSpeaker(session)?.seat ?? null;
     if (session.phase === 'day_sheriff') return engine.currentSheriffVoter(session)?.seat ?? null;
     if (session.phase === 'day_sheriff_pk_vote') return engine.currentSheriffPkVoter(session)?.seat ?? null;
     // 定发言方向：高亮在任警长（警徽是公开信息，标出来不泄漏什么）
@@ -1030,6 +1076,27 @@ function actingSeat(session) {
     if (session.phase === 'badge_wait') return engine.currentDeath(session)?.seat ?? null;
     if (session.phase === 'last_words') return engine.currentLastWordSpeaker(session);
     return null;
+}
+
+/** 四拍「让 X 号 X 发言」（见 renderTableBottom 里那四个按钮） */
+const SPEAK_PHASES = ['day_speak', 'day_pk', 'day_sheriff_speak', 'day_sheriff_pk'];
+
+/**
+ * 该给谁打高亮。
+ *
+ * 发言那四拍**不按「谁该开口」**：`actingSeat` 指的是**下一位**，而他的那段话还在路上
+ * （点一下 → 等 AI 回话 → 落进流水，是同一拍里的事）⇒ 高亮会比读到的东西快一步：
+ * 你正在读某人的发言，亮的却是下一位（用户 2026-09-17 报的「高亮快了一点」）。这四拍
+ * 因此改成「**你刚叫起来的那一位**」——`speakTurn` 在点下去那一刻落笔，连同相位与轮次
+ * 一起记（换一天、换一拍，旧记录自然作废），这一拍一次都没点过就不亮。
+ *
+ * 其余阶段照旧走 `actingSeat`：那几拍高亮的就是正在发生的事（「等待发动技能」亮的是
+ * 正在走流程的那一位），投票与表态那几拍没有逐座的话可读、高亮就是进度。
+ */
+function calledSeatOf(app, session) {
+    if (!session || !SPEAK_PHASES.includes(session.phase)) return actingSeat(session);
+    const c = app.calledSeat;
+    return c && c.phase === session.phase && c.round === session.round ? c.seat : null;
 }
 
 /** 阶段条右边那句「现在到谁了」 */
@@ -1190,7 +1257,7 @@ function renderBoardCell(app, session, seat, mine) {
     const cls = [
         isMe ? 'is-me' : '',
         dead ? 'is-dead' : '',                                  // 离场只灰暗，不写字
-        actingSeat(session) === seat.seat ? 'is-turn' : ''
+        calledSeatOf(app, session) === seat.seat ? 'is-turn' : ''
     ].filter(Boolean).join(' ');
     const who = grow ? `让 ${seat.name} 复盘这一局` : `${seat.seat} 号 ${seat.name || ''}`;
     // 两个角标一律**常驻**（没内容时 CSS 自己藏），这样就地更新只改文字、不用管增删。
@@ -1274,7 +1341,7 @@ function renderTableSeat(app, session, seat, mine, over) {
     // 自己那一格照样点得动——复盘是每个角色自己的事，主视角的角色也要能想想这一局
     const grow = canInsight(app, session, seat);
     return `
-        <button class="ww-seat ${isMe ? 'is-me' : ''} ${dead ? 'is-dead' : ''} ${actingSeat(session) === seat.seat ? 'is-turn' : ''}"
+        <button class="ww-seat ${isMe ? 'is-me' : ''} ${dead ? 'is-dead' : ''} ${calledSeatOf(app, session) === seat.seat ? 'is-turn' : ''}"
                 ${grow ? `data-insight="${seat.seat}"` : `data-mark="${seat.seat}"`} ${grow || canMark ? '' : 'disabled'}>
             <span class="ww-seat-num">${seat.seat} 号</span>
             ${avatarHtml(seat.characterId, seat.name)}
@@ -1810,7 +1877,8 @@ function renderTableBottom(app) {
     const mine = mySeatOf(app, session);
 
     if (isOver(session)) return renderReviewComposer(app, session, mine);
-    if (app.busy) {
+    // 半自动跑着的时候不盖底栏：它替别人问票与我这一票无关，我那一票得照样点得动
+    if (app.busy && !app.autoVote) {
         return `<footer class="ww-bottom"><button class="primary" disabled>⏳ 等 AI 回话…</button></footer>`;
     }
 
@@ -1842,11 +1910,29 @@ function renderTableBottom(app) {
         return renderComposer(app, session, session.phase === 'day_sheriff_speak' ? 'candidate' : 'speak');
     }
     if (mourner && mine && mourner.seat === mine.seat) return renderComposer(app, session, 'lastwords');
-    if (voter && mine && voter.seat === mine.seat) return renderVoteRow(app, session, mine);
+    // 轮到我投票：**半自动跑着时也照画**（我这一票随时能点），所以照旧排在这里
+    if (voter && mine && voter.seat === mine.seat) return renderVoteRow(app, session, mine, !!app.autoVote);
+    // 半自动跑着时**不看轮没轮到我**：这一拍只要还有我的一票没投，格子就先给我（自己投 / 弃票 /
+    // 让 AI 代投），投过了才落回下面那条进度行等别人。名单用的是引擎那一份——与循环读的是同一个
+    // （`pendingVoters` 自带阶段闸：不是投票的那几拍它本来就是空表）
+    if (app.autoVote && mine
+        && engine.pendingVoters(session).some(x => x.seat === mine.seat)) {
+        return renderVoteRow(app, session, mine, true);
+    }
     if (declarer && mine && declarer.seat === mine.seat) return renderDeclareRow(session);
     // 定发言方向：轮到在任警长自己点（他只能定从警左还是警右开始）
     if (session.phase === 'day_order' && mine && engine.sheriffSeatOf(session) === mine.seat) {
         return renderOrderRow(session);
+    }
+    // 半自动正在替别人问票：底栏只报一句进度。**不给任何会再打一次 AI 的按钮**——
+    // 那会和循环撞成两位同时在被问（一次一位是这一档的前提）
+    if (app.autoVote) return `<footer class="ww-bottom">${renderAutoHint(app, session)}</footer>`;
+    // 半自动开着、名单上还有别人没投、可是循环没在跑（被打断了，或者刚回到这张桌）：
+    // 给一个「继续投票」把同一段再跑一遍。没等到 AI 回话的那几位也留在名单里，
+    // 所以这一个按钮同时就是「重试」——不必再单独记「上一次谁失败了」
+    if (engine.VOTE_PHASES.includes(session.phase) && autoMode() === 'half'
+        && engine.pendingVoters(session).some(s => s.seat !== mine?.seat)) {
+        return `<footer class="ww-bottom"><button id="wwVoteMore" class="primary">▶ 继续投票</button></footer>`;
     }
 
     const act = label => `<footer class="ww-bottom"><button id="wwAct" class="primary">${esc(label)}</button></footer>`;
@@ -1972,11 +2058,21 @@ function renderComposer(app, session, mode = 'speak') {
 }
 
 /** 交给 AI 的那个按钮：白天投完票、夜里三步，出处都在这儿（data-delegate 分派） */
-function renderDelegate(kind) {
-    return `<div class="ww-composer-row"><button id="wwDelegate" class="ghost" data-delegate="${kind}">让 AI 决定</button></div>`;
+function renderDelegate(kind, label = '让 AI 决定') {
+    return `<div class="ww-composer-row"><button id="wwDelegate" class="ghost" data-delegate="${kind}">${esc(label)}</button></div>`;
 }
 
-function renderVoteRow(app, session, mine) {
+/**
+ * 半自动那一行进度（正在挨个问票时挂在底栏）。数的是**还没落地的票**（含正在飞的那一位）——
+ * 「还差 3 票」比「正在问第 7 位」诚实：在飞的那一位也可能没等到回话、留在名单里等重试。
+ */
+function renderAutoHint(app, session) {
+    const left = engine.pendingVoters(session);
+    const mineLeft = left.some(s => s.seat === mySeatOf(app, session)?.seat);
+    return `<div class="ww-auto-hint">🤖 半自动正在挨个问票 · 还差 ${left.length} 票${mineLeft ? '（其中一票是你的）' : ''}</div>`;
+}
+
+function renderVoteRow(app, session, mine, auto = false) {
     // 四个落点，四个合法集（都是引擎给的那一份）：白天放逐 / 白天 PK 补投（只能投台上的人）
     // / 警下投票（只有上警且没退水的那几位）/ 竞选平票的补投（台上那几位）
     const pk = session.phase === 'day_pk_vote';
@@ -1997,7 +2093,8 @@ function renderVoteRow(app, session, mine) {
                 ${targets.map(t => `<button class="ww-mark-chip" data-vote="${t.seat}">${t.seat} 号 ${esc(t.name)}</button>`).join('')}
                 <button class="ww-mark-chip" data-vote="0">弃票</button>
             </div>
-            ${renderDelegate('vote')}
+            ${renderDelegate('vote', auto ? '让 AI 代投' : '让 AI 决定')}
+            ${auto ? renderAutoHint(app, session) : ''}
         </footer>
     `;
 }
@@ -2181,8 +2278,13 @@ function renderNightAct(app, session, mine, kind) {
  * ① 记下 roundId，回来时局面已经往前走过就把这次结果丢掉（照 textAdventure 的比对思路）
  * ② 真的打出去了才计调用数、记成败；模板模式下这些函数根本不会发请求
  * ③ 调用点自己决定怎么把结果落到状态上（apply）
+ *
+ * `strict` 只给半自动问票用：**没等到 AI 回话就整笔不落**。别的调用点照旧走模板兜底——
+ * 那边「宁可先有一步」比「空一拍」强（结算、发言都卡不起）；投票不行，它那一档的兜底是
+ * `res?.vote ?? null`，等于把一次失败静默记成一票弃票，事后谁也认不出来。不落的这一票
+ * 留在名单里，底栏那个「继续投票」就是重试入口。
  */
-async function runTurn(app, close, { call, apply }) {
+async function runTurn(app, close, { call, apply, strict = false }) {
     const session = app.session;
     if (!session || app.busy) return null;
     const sid = session.id;
@@ -2197,17 +2299,26 @@ async function runTurn(app, close, { call, apply }) {
 
     const out = await mutateSession(app, sid, s => {
         if ((s.roundId || 0) !== roundId) return { dropped: true };
+        // 调用照样记账（它真打出去了、也真失败了），只是**不落地**
         if (willCall) {
             s.callCount = (s.callCount || 0) + 1;
             ai.afterCall(s, { ok: !res?.degraded });
         }
+        // `!res` 也要算「没等到回话」：`call` 抛出来时上面那个 catch 把 res 收成了 null，
+        // 只查 `degraded` 的话它会漏到下一行、被 apply 记成一票弃票——正是这一档要防的那件事
+        if (strict && (!res || res.degraded)) return { dropped: false, skipped: true };
         return { dropped: false, done: !!apply(s, res) };
     });
 
     renderApp(app, close);
     if (out?.dropped) toast(app, '局面已经往前走了，这次结果作废');
+    // strict 那一路不在这儿报：半自动跑完一轮会统一说一句「N 位没等到回话」，
+    // 一句顶一句地弹两个 toast 只会互相盖掉
+    else if (out?.skipped) { /* 见上：留给循环收尾时报 */ }
     else if (res?.degraded && !app.session?.ai?.template) toast(app, '这次没等到 AI 回应，先用模板顶上');
     else if (out && out.done === false) toast(app, '这一步没生效，再点一次试试');
+    // 这一拍是不是把局面送进了投票阶段（四个说话落点的尾巴，见 maybeAutoVote）
+    maybeAutoVote(app, close);
     return { res, ...out };
 }
 
@@ -2217,6 +2328,10 @@ async function runTurn(app, close, { call, apply }) {
  * 退水那一下允许空正文（主视角可以只点退水不说话，引擎那边同样允许）。
  */
 function speakTurn(app, close, seatNo, type) {
+    // 高亮跟着**这一下点击**走（见 calledSeatOf）：点下去就亮他，回话落进流水之后你读到的那段
+    // 话就是他的。**写在 runTurn 之前**——点下去要先重绘一次「等待中」那一态，那一刻高亮就得在
+    const s0 = app.session;
+    if (s0) app.calledSeat = { phase: s0.phase, round: s0.round, seat: seatNo };
     return runTurn(app, close, {
         call: s => ai.speakCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
@@ -2292,8 +2407,10 @@ function lastWordsTurn(app, close, seatNo, type) {
     });
 }
 
-function voteTurn(app, close, seatNo, type) {
+/** `strict` 只有半自动那一段传（没等到回话就整笔不落，见 runTurn）——手动点「让 X 号 投票」照旧走模板兜底 */
+function voteTurn(app, close, seatNo, type, strict = false) {
     return runTurn(app, close, {
+        strict,
         call: s => ai.voteCharacter({ session: s, seatNo, type }),
         apply: (s, res) => {
             engine.mergeLabels(s, seatNo, res?.marks || {});
@@ -2591,6 +2708,10 @@ async function sendMySpeech(app, close) {
     const rawPick = (words && engine.isSheriff(session, mine.seat)) ? app.badgePick : null;
     const hasPick = rawPick != null;
     const badgeTo = hasPick && Number(rawPick) !== 0 ? Number(rawPick) : null;
+    // 高亮跟着「我开口」这一下走，与 AI 那一路同一条口径（见 calledSeatOf）；遗言那一拍不在那张表里，
+    // 它本来就归 actingSeat 管。空正文被上面拦下时不记——没说出来就不点亮
+    const hl = SPEAK_PHASES.includes(session.phase)
+        ? { phase: session.phase, round: session.round, seat: mine.seat } : null;
     // 五种落点：遗言 / 上警发言（多带一个退不退水）/ 竞选 PK 台上那一轮 / 白天 PK 台上那一轮 /
     // 普通白天发言——都是同一段话，去处不同
     const ok = await mutateSession(app, session.id, s => {
@@ -2606,8 +2727,11 @@ async function sendMySpeech(app, close) {
     app.draft = '';
     app.badgePick = null;
     app.withdraw = false;
+    if (ok && hl) app.calledSeat = hl;
     renderApp(app, close);
     if (!ok) toast(app, '这一步没生效，再点一次试试');
+    // 我自己那一段说完，也可能正好把这一天送进投票阶段（见 maybeAutoVote 的两个入口）
+    maybeAutoVote(app, close);
 }
 
 /** 代笔：带上玩家自己打的草稿与标记，让 AI 以它的口吻写完；失败就原样留草稿 */
@@ -2662,11 +2786,15 @@ async function castMyOrder(app, close, raw) {
     if (!ok) toast(app, '这一步没生效，再点一次试试');
 }
 
-/** 玩家自己投票：点选，不打 AI */
+/**
+ * 玩家自己投票：点选，不打 AI。
+ * **半自动跑着时这一票不排队**：AI 那一头可能正替别人通话（`app.busy`），可我这一票与
+ * 它无关——照旧立刻落库（写队列那一道只管让两笔写不叠上，见 mutateSession）。
+ */
 async function castMyVote(app, close, target) {
     const session = app.session;
     const mine = mySeatOf(app, session);
-    if (!session || !mine || app.busy) return;
+    if (!session || !mine || (app.busy && !app.autoVote)) return;
     const pick = target === 0 ? null : target;
     const ok = await mutateSession(app, session.id, s => (
         s.phase === 'day_sheriff' ? engine.applySheriffVote(s, mine.seat, pick)
@@ -2675,6 +2803,7 @@ async function castMyVote(app, close, target) {
                     : engine.applyVote(s, mine.seat, pick)));
     renderApp(app, close);
     if (!ok) toast(app, '这一票没记上，再点一次试试');
+    else if (app.autoVote) toast(app, '你这一票记上了，剩下的半自动在问');   // 底栏这一下会翻成进度行，说一声
 }
 
 /**
@@ -2790,7 +2919,16 @@ async function submitWolfPlan(app, close, { pick = null, note = '' } = {}) {
 function delegateMyTurn(app, close, kind) {
     const session = app.session;
     const mine = mySeatOf(app, session);
-    if (!session || !mine || app.busy) return;
+    if (!session || !mine) return;
+    // 半自动正在替别人问票：这一下别另开一次调用去跟它挤——挂个旗子，循环轮到我就一起问了。
+    // **这一支必须排在 busy 守卫之前**：循环几乎一直处在「一次调用在飞」的状态里，而这一下
+    // 不打 API、只是挂个旗子（与 castMyVote 的 `app.busy && !app.autoVote` 是同一条口径）。
+    if (kind === 'vote' && app.autoVote) {
+        app.autoVote.mine = true;
+        toast(app, '好，你这一票也交给 AI');
+        return;
+    }
+    if (app.busy) return;
     if (kind === 'vote') return voteTurn(app, close, mine.seat, getRoomType(session.typeId));
     // 上警表态：与投票同款的逐座调用，只是问的不是「投谁」而是「上不上」（见 declareTurn）
     if (kind === 'declare') return declareTurn(app, close, mine.seat, getRoomType(session.typeId));
@@ -2838,6 +2976,111 @@ function badgeTurn(app, close) {
     });
 }
 
+/* ---------------- 半自动：投票阶段交给 AI 挨个问 ----------------
+ *
+ * 三档存在 localStorage 的一个 `global_*` 键里（AUTO_MODES）：**整个模块一档，不是某一桌的**。
+ * 「半自动」只改一件事：进投票阶段那一下就自己按座位顺序、一次一位地把票问完；主视角那一座
+ * 留着（自己投，或者点「让 AI 代投」）。
+ *
+ * **开工口只有两个**（`maybeAutoVote` 的两个调用点：runTurn 的尾巴、sendMySpeech 的尾巴）。
+ * 因为「进投票阶段」在引擎里只有四条路，全都长在「最后一个人说完」那一瞬——applySpeech /
+ * applyPkSpeech / applySheriffSpeech / applySheriffPkSpeech 的尾巴（见 VOTE_PHASES），
+ * 而那四个落点在界面里只从这两个函数进。所以不必挂在渲染上，也不必逐条路挂钩子。
+ * 万一哪天真漏了一条（或者中途被打断），底栏那个「继续投票」就是兜底（见 renderTableBottom）。
+ *
+ * 中途被打断（退出这张桌 / 把档位调回「关闭」）的处理是**停下、不追**：已经飞出去的那一次
+ * 照旧落库（落库认的是「哪一局」，不看模块还开着没有——`mutateSession` 从库里重读那一局），
+ * 没发起的就此停住。再回到这张桌时，底栏出现「继续投票」，点它就是把同一段再跑一遍——
+ * 所以这一摊**不需要记「上次跑到哪儿了」**，也不需要一整串状态：循环每一轮现读名单就够了。
+ */
+function autoMode() {
+    return autoModeOf(localStorage.getItem(AUTO_MODE_KEY));
+}
+
+function setAutoMode(key) {
+    localStorage.setItem(AUTO_MODE_KEY, autoModeOf(key));
+}
+
+/**
+ * 点一下循环一格：**关闭 ↔ 半自动**（用户 2026-09-17 定的这一版）。
+ *
+ * 全自动那一档还没做（`AUTO_MODES` 里 `ready: false`），**先不进循环**——等它真做出来再把它
+ * 接进来（那时圆的「全亮」那一态才有意义）。认不出的值（老值、脏值）都当「关闭」起步。
+ *
+ * 改动只落 localStorage + 重绘，**不主动开工**：开工口还是那两个（进了投票阶段才动，见
+ * maybeAutoVote）；投票阶段中途打开它，底栏那颗「继续投票」就是入口。
+ */
+function cycleAutoMode(app, close) {
+    const next = autoMode() === 'half' ? AUTO_DEFAULT : 'half';
+    setAutoMode(next);
+    renderApp(app, close);
+    toast(app, next === 'half' ? '半自动：进投票阶段就自己挨个问票' : '改回手动：一位一位点');
+}
+
+/** 这一拍该不该由半自动开工（不然就什么都不做，照旧手动一位一位点） */
+function maybeAutoVote(app, close) {
+    if (app.autoVote || app.closed || app.busy || app.readonly) return;
+    if (autoMode() !== 'half') return;
+    const session = app.session;
+    if (!session || isOver(session)) return;
+    const mine = mySeatOf(app, session)?.seat;
+    if (!engine.pendingVoters(session).some(s => s.seat !== mine)) return;
+    runAutoVote(app, close);
+}
+
+/**
+ * 把这一拍的票挨个问完：**一次一位、按座号顺序**（同时走十位既容易失败，也不好读流水）。
+ *
+ * 主视角那一座跳过，除非他自己点了「让 AI 代投」（`autoVote.mine`）。每一轮都现读
+ * `pendingVoters`——我这一票、别的 AI 那一票都可能刚落地，读库里的那份才算数。
+ *
+ * 四条停下来的理由，都在循环开头：① 人不在这一桌了（关了 / 被换页拆了）② **这一轮不再是
+ * 当前那一轮**（换桌 / 离桌把旗子清了——用户 2026-09-16 原话：「退出该桌的时候，自动流程关闭」）
+ * ③ 档位不是半自动了 ④ 名单上没别人了。**没有「失败」这一条**：某一位没等到回话就跳过
+ * 他往下走（他留在名单里），一拍问完还剩谁就是失败的那几位，报一句、底栏那个
+ * 「继续投票」就是重试——不必另立一份「上次谁失败了」的状态。
+ */
+async function runAutoVote(app, close) {
+    const run = { mine: false };          // 挂在 app.autoVote 上：这一轮的旗子（见 delegateMyTurn）
+    app.autoVote = run;
+    const asked = new Set();              // 这一拍问过谁：没成的那位别在同一拍里死磕
+    const onTable = () => !app.closed && app.root.isConnected;   // 界面都没了就别再打 API
+    let count = 0;
+    let failed = 0;
+    let finished = false;
+    let phase = null;
+    try {
+        while (true) {
+            // 旗子被换掉 = 这一轮作废：换桌 / 离桌（resetTransient 清旗子）与「又开了一轮」都在内。
+            // 只看 onTable() 不够——换了桌界面还在，循环会跟着 app.session 跑到**新那一桌**去问票
+            if (app.autoVote !== run || !onTable() || autoMode() !== 'half') return;
+            const session = app.session;
+            if (!session || app.readonly || isOver(session)) return;
+            // 换了一拍就重新记名：白天投平了会直接翻到 PK 补投，而台上那两位在主投那一拍
+            // 已经投过、都在名册里——不清的话这一拍会一位都不问就收工（名单里明明还有人）
+            if (session.phase !== phase) { phase = session.phase; asked.clear(); }
+            const mine = mySeatOf(app, session)?.seat;
+            const next = engine.pendingVoters(session)
+                .find(s => (run.mine || s.seat !== mine) && !asked.has(s.seat));
+            if (!next) { finished = true; return; }
+            asked.add(next.seat);
+            count += 1;
+            const out = await voteTurn(app, close, next.seat, getRoomType(session.typeId), true);
+            if (out?.skipped) failed += 1;
+        }
+    } finally {
+        // 只收自己那一面旗子。旗子已经不是自己的（被打断、或者新的一轮接了手）就不重绘也不报账：
+        // 接手的那一轮自己会收尾，这里顺手一清就会把**它**的旗子抹掉（代投旗子与进度行一起消失）
+        if (app.autoVote === run) {
+            app.autoVote = null;
+            // 收工这一下要自己重绘：最后一次落库时循环还没跑完，底栏那会儿还写着进度行
+            if (!app.closed && app.session) renderApp(app, close);
+            if (failed) toast(app, `${failed} 位没等到 AI 回话，点「继续投票」再问一次`);
+            else if (finished && count) toast(app, '这一拍的票都问完了');
+        }
+    }
+}
+
 /** 换桌 / 重开 / 离桌时把只在内存里的草稿清干净（跟 app.draft 一个性质，都不落库） */
 function resetTransient(app) {
     app.draft = '';
@@ -2845,6 +3088,8 @@ function resetTransient(app) {
     app.wolfNote = '';
     app.badgePick = null;    // 遗言那一屏顺手选的警徽去向（还没发出去，不落库）
     app.withdraw = false;    // 上警发言那屏的「退水」开关（同上，发送那一刻才算数）
+    app.calledSeat = null;   // 发言那四拍的高亮（见 calledSeatOf）：换桌 / 离桌 = 重新数
+    app.autoVote = null;      // 换桌 / 离桌 = 这一轮半自动到此为止（循环每一轮开头都查它）
     clearReviewTimers(app);   // 换桌 / 离桌 = 退出这一场：还在等的窗口全掐掉
 }
 
@@ -3207,6 +3452,10 @@ function bindApp(app, close) {
     root.querySelector('#wwGiveUp')?.addEventListener('click', () => confirmGiveUp(app, close));
     // 这一桌的做法约定：只有准备页/对局页、且这一局还打得动时才有这个按钮（见 renderTopbar）
     root.querySelector('#wwRulesBtn')?.addEventListener('click', () => openRulesPanel(app, close));
+    // 自动推进那一档：桌内两页才有（见 renderTopbar）；点一下循环「关闭 ↔ 半自动」
+    root.querySelector('#wwAutoBtn')?.addEventListener('click', () => cycleAutoMode(app, close));
+    // 继续投票：半自动开着但循环没在跑（被打断了 / 刚回到这张桌），点一下把同一段接着跑
+    root.querySelector('#wwVoteMore')?.addEventListener('click', () => maybeAutoVote(app, close));
 
     root.querySelectorAll('.ww-tab').forEach(btn => {
         btn.addEventListener('click', async () => {

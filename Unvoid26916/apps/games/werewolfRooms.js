@@ -241,6 +241,42 @@ export function revealLabel(mode) {
     return mode === 'open' ? '明牌' : '暗牌';
 }
 
+/* ---------------- 自动推进（模块级的一档设置，不是某一桌的） ----------------
+ *
+ * 用户 2026-09-16 定：这是**整个模块**的状态——所以它不进 `session`、不进档案，
+ * 存的是 localStorage 里一个 `global_*` 键（开关类键的成法，见 AI/04 与 CLAUDE.md 第 5 条）。
+ *
+ * 三档（**声明顺序照旧是这张表的顺序**——面板那轮过后界面已经改成顶栏一颗圆钮，
+ * 今天只循环 关闭 ↔ 半自动，见 werewolf.js 的 cycleAutoMode）：
+ *   full 全自动 —— 整局都由 AI 推进。**今天没做**（`ready: false`：圆钮那个循环进不到它）。
+ *   half 半自动 —— 一进投票阶段就自己按顺序问 AI；主视角那一座留着，自己投或点代投。
+ *   off  关闭   —— 保持现状：一位一位点，AI 不会自己动。
+ *
+ * `desc` 今天没有界面在读（原先那块面板删掉了，圆钮只用 `name` 当 aria-label）——留着当
+ * 这三档的白纸黑字，`full` 做出来时也有现成的一行说明。
+ *
+ * `autoModeOf` 只负责**认值**（认不出的一律落回「关闭」）；「哪一档会自己动」由调用点
+ * 明写 `=== 'half'`——别把 `full` 顺手当成「更自动的半自动」，它一行都还没写。
+ */
+export const AUTO_MODE_KEY = 'global_werewolf_auto';
+export const AUTO_DEFAULT = 'off';
+
+export const AUTO_MODES = [
+    { key: 'full', name: '全自动', ready: false, desc: '整局交给 AI 推进，你只看——这一档还没做。' },
+    { key: 'half', name: '半自动', ready: true, desc: '进入投票阶段就自动问 AI，你只投你自己那一票。' },
+    { key: 'off', name: '关闭', ready: true, desc: '保持现状：一位一位点，AI 不会自己动。' }
+];
+
+/** 认一个存下来的档位；认不出（老值、脏值、没存过）一律当「关闭」＝今天的行为 */
+export function autoModeOf(raw) {
+    return AUTO_MODES.some(m => m.key === raw) ? raw : AUTO_DEFAULT;
+}
+
+/** 某一档的元数据（认不出就给「关闭」那一条，界面不必自己兜底） */
+export function autoModeMeta(key) {
+    return AUTO_MODES.find(m => m.key === autoModeOf(key));
+}
+
 /* ---------------- 这一桌的做法约定（作者自定义：模板正文 + 本桌补充） ---------------- */
 
 /*

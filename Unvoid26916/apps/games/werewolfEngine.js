@@ -101,6 +101,15 @@ export const PHASES = [
     'ended'
 ];
 
+/**
+ * 四个**投票阶段**（票箱各一个，见 pendingVoters）。半自动据此判断「这一拍是不是该挨个问票」。
+ *
+ * 声明顺序就是这一局里走到的顺序：警下投票（第一天）→ 竞选补投 → 白天放逐 → 白天补投。
+ * **只列「正在收票」的那四拍**——开票（day_verdict / day_sheriff_verdict）与台上发言
+ * 都不算：前者是本地即时动作、没有票要问，后者问的是话不是票。
+ */
+export const VOTE_PHASES = ['day_sheriff', 'day_sheriff_pk_vote', 'day_vote', 'day_pk_vote'];
+
 export const PHASE_LABEL = {
     night_guard: '第一夜 · 守卫守护',
     night_wolf: '第一夜 · 狼人行动',
@@ -377,6 +386,31 @@ export function votersOf(session) {
 export function currentVoter(session) {
     const voted = new Set(Object.keys(session?.votes || {}).map(Number));
     return votersOf(session).find(s => !voted.has(s.seat)) || null;
+}
+
+/**
+ * 这一拍还有哪些座位没投（按座号顺序）。半自动按这张名单一座一座问 AI。
+ *
+ * **四个投票阶段、四个票箱、四套名单**，这张表照抄 `currentVoter` 那一族的口径，一处也不另立：
+ *   day_vote             白天放逐    `votes`            活人减翻过牌的白痴（votersOf）
+ *   day_pk_vote          平票补投    `pk.votes`         再减台上那几位（pkVotersOf）
+ *   day_sheriff          警下投票    `sheriffVotes`     再减上警过的人（sheriffVotersOf）
+ *   day_sheriff_pk_vote  竞选补投    `sheriffPk.votes`  再减台上那几位（sheriffPkVotersOf）
+ * 混着读票箱是这一摊的老坑（见 currentSheriffVoter 的注释），所以这里**按 phase 取箱**。
+ *
+ * 不是投票阶段就返回空数组——半自动靠这一条判断「这一拍要不要开工」。
+ * 弃票在票箱里存的是 null，照样算「投过了」（与 applyVote 的口径一致）。
+ */
+export function pendingVoters(session) {
+    const phase = session?.phase;
+    const [voters, box] = phase === 'day_vote' ? [votersOf(session), session?.votes]
+        : phase === 'day_pk_vote' ? [pkVotersOf(session), session?.pk?.votes]
+            : phase === 'day_sheriff' ? [sheriffVotersOf(session), session?.sheriffVotes]
+                : phase === 'day_sheriff_pk_vote' ? [sheriffPkVotersOf(session), session?.sheriffPk?.votes]
+                    : [null, null];
+    if (!voters) return [];
+    const voted = new Set(Object.keys(box || {}).map(Number));
+    return voters.filter(s => !voted.has(s.seat));
 }
 
 /* ---------------- 警长（只有板子上写了 sheriff:true 才走得到） ---------------- */

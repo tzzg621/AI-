@@ -23,24 +23,30 @@ import { roleLabel, getRoomType } from './werewolfRooms.js';
 /* ---------------- 档位 ---------------- */
 
 /**
- * 水平五档：`cap` = 一次最多注入几条**策略**条目（流程纪律不占额度）；
- * `line` 是讲给模型听的**认知口吻**描述——只说他「怎么想」，不是命令句：
+ * 水平五档：`line` 是讲给模型听的**认知口吻**描述——只说他「怎么想」，不是命令句：
  * 水平该体现在他自己的判断里，而不是被指挥着走。
  *
- * **cap 的口径（用户 2026-09-16 定）**：**区分主要交给「解锁度」**（`cond`——一个人
- * 懂多少由他经历过什么决定），cap 退成一道**保险丝**，不是主要手段；「能力之类的
- * 依旧能提升上限」⇒ 梯度保留，只是每档都放宽。**数字是初值**，玩两局再调。
+ * `litBy` 认 `level:*`（见它自己的 case 'level'），但**到今天为止的 42 条里没有一条**
+ * 把 `level:` 写在 cond 里 —— 所以现在五档点亮的是同一份（实测 20/20/20/20/20）。
+ * 档位今天实际说话的地方是两处：① 那一行「你的水平」；② 条目正文里他够得着哪几层
+ * （今天那两处 `level:*` 都长在 `deep` 层上）。要让**条目本身**吃档位是现成的写法，而且
+ * **后续可能会用**（用户 2026-09-17：最终目的是做出每个角色的差异度——符合该角色的人设
+ * 与水平，一切的设计都可以为此优化）；今天没写的卡点是「档位怎么长」那条口径（同日讨论，未定）。
  *
- * 2026-09-16 由 `4/6/8/10/12` 抬到 `6/9/12/16/20`：加完四条策略条目后，12 人警长局
- * 可点亮的策略条目涨到 ~14，而老手旧 cap 恰好卡满 10 ⇒ 排后面的会被**静默截掉**
- * （截的是「tier + 数组声明顺序」的尾巴，**不是按难度截**，见 codexBlock）。
+ * 〔2026-09-17 拆掉了这里的 `cap`（`4/6/8/10/12` → `6/9/12/16/20`），它按档位卡
+ * **策略条目条数**。用户的口径：**内置条目不要条数额度**——
+ * 「点亮 = 这个角色解锁了什么」（角色级、持久，手册那一页显示的就是它），
+ * 「注入 = 这一局他用得上什么」（本局级）。两者**允许不等**；不等的地方来自**筛选**
+ * （用户原话：目前只由房型产生，后续可能还会有其他条件）。
+ * 条数额度是**另一层、而且是隐形的** ⇒ 拆掉，角色侧只留「点亮」这一份。
+ * 它只属于**自定义条目**那条线（见功能总览的「额度：默认 5 条」）。〕
  */
 export const TIERS = [
-    { key: 'beginner', label: '新手', cap: 6, line: '你刚接触狼人杀，规则听过一遍，真上桌还容易发懵。', aliases: ['新手', '菜鸟', '初学者', 'beginner', 'newbie'] },
-    { key: 'rookie', label: '入门', cap: 9, line: '你玩过几局，流程已经熟了，判断基本靠直觉和谁说话顺耳。', aliases: ['入门', '初学', 'rookie'] },
-    { key: 'normal', label: '普通玩家', cap: 12, line: '你懂常见套路，能跟着局势走，偶尔会多想一想。', aliases: ['普通玩家', '普通', 'normal', 'average'] },
-    { key: 'veteran', label: '老手', cap: 16, line: '你打得多了，会算票、会盯发言里的破绽。', aliases: ['老手', '熟练', 'veteran'] },
-    { key: 'expert', label: '高手', cap: 20, line: '你对这游戏理解很深，习惯从全局、票型和人心上推演。', aliases: ['高手', '大师', 'expert', 'master'] }
+    { key: 'beginner', label: '新手', line: '你刚接触狼人杀，规则听过一遍，真上桌还容易发懵。', aliases: ['新手', '菜鸟', '初学者', 'beginner', 'newbie'] },
+    { key: 'rookie', label: '入门', line: '你玩过几局，流程已经熟了，判断基本靠直觉和谁说话顺耳。', aliases: ['入门', '初学', 'rookie'] },
+    { key: 'normal', label: '普通玩家', line: '你懂常见套路，能跟着局势走，偶尔会多想一想。', aliases: ['普通玩家', '普通', 'normal', 'average'] },
+    { key: 'veteran', label: '老手', line: '你打得多了，会算票、会盯发言里的破绽。', aliases: ['老手', '熟练', 'veteran'] },
+    { key: 'expert', label: '高手', line: '你对这游戏理解很深，习惯从全局、票型和人心上推演。', aliases: ['高手', '大师', 'expert', 'master'] }
 ];
 
 /**
@@ -60,15 +66,12 @@ export const FLAIR_TIERS = [
  */
 export const GUEST_TIER = 'normal';
 
-/** 没有档位（还没测评）但有档案时，策略条目按中庸给，别让没估过的人白拿满配 */
-export const NO_TIER_CAP = 6;
-
 /**
  * 悟性 → 这一局里的**记忆带宽**（用户 2026-09-13 定）：能同时盯住几个人（`watch`）、
  * 别人的普通发言还记得住几条（`tail`）。
  *
  * 悟性本来是「预留」的一栏（见上面 FLAIR_TIERS 的注释「正职是以后的成长速度」），这就是它的正职：
- * 水平管他懂多少（条目额度），悟性管他记得住多少。**数字是可调的初值**，用户玩两局再改。
+ * 水平管他**懂多少**（哪些条目点亮），悟性管他**记得住多少**。**数字是可调的初值**，用户玩两局再改。
  */
 export const FLAIR_WATCH = {
     dull: { watch: 1, tail: 6 },
@@ -77,7 +80,7 @@ export const FLAIR_WATCH = {
     sharp: { watch: 4, tail: 24 }
 };
 
-/** 没测评 / 悟性认不出的按「一般」兜底（照 NO_TIER_CAP 的写法：别让没估过的人白拿满配） */
+/** 没测评 / 悟性认不出的按「一般」兜底（照档位兜底 GUEST_TIER 的写法：别让没估过的人吃亏） */
 export const DEFAULT_WATCH_FLAIR = 'steady';
 
 /**
@@ -756,16 +759,21 @@ export function deepLockText(entry, record) {
 
 /* ---------------- 讲给模型听 ---------------- */
 
-// 整块字符上限（第二道封顶，照 DictionaryMatcher 的双封顶写法）。
+// 整块字符上限（照 DictionaryMatcher 的双封顶写法；2026-09-17 拆掉档位 cap 之后，今天只剩这一道）。
 // 2026-09-15 用户定：1200 → 5000，为的是 12 人警长局那几条规矩进得来。
-// 注意这不是空操作：**条数 cap 只管策略条目**（`cond !== 'always'`），`always` 的流程纪律
-// 只受这一道字数封顶——所以抬上去之后，原先「整条超长被跳过」的那些**策略条目**会重新进来
-// （上限是各档位的 cap，不是字数）。超长仍然整条跳过、不截半句（设计如此）。
+// 超长**整条跳过**、不截半句（设计如此）——所以它是「这一局给几条」的账，
+// 不是「这个角色懂多少」的账：后者由 `cond` 的点亮全权决定（见 TIERS 的注释）。
 export const CODEX_MAX_CHARS = 5000;
 export const CODEX_HEAD = '【你对狼人杀的理解】';
 
 /**
- * 这个座位此刻能拿出手的狼人杀知识。没得说就返回空串（**不产生空标题**）。
+ * 这个座位此刻能拿出手的狼人杀知识 = **点亮 ∩ 这一桌**，再按字符预算装。
+ * 没得说就返回空串（**不产生空标题**）。
+ *
+ * 两条口径别混（用户 2026-09-17 定）：**点亮**是「这个角色解锁了什么」（角色级、持久，
+ * 手册那一页显示的就是它，不过房型），**注入**是「这一局他用得上什么」（本局级）。
+ * 两者**允许不等**，差额来自**筛选**（用户原话：目前只由房型产生，后续可能还会有其他条件）。
+ * 这个函数自己**不再筛**：`maxChars` 只是装不下的兜底（超长整条跳过），不是一道取舍。
  * @param {object} record 这个座位自己的档案（名册读 stats，路人读 npcs；可以是 null）
  * @param {{isGuest?:boolean, roomScope?:string, maxChars?:number}} opts
  */
@@ -779,16 +787,12 @@ export function codexBlock(record, { isGuest = false, roomScope = null, maxChars
 
     const picked = ENTRIES.filter(e => ids.has(e.id))
         .sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);   // 稳定排序：同级保持声明顺序
-    const cap = tier?.cap ?? NO_TIER_CAP;
-    let used = 0, drawn = 0;
+    let used = 0;
     for (const e of picked) {
-        const strategic = e.cond !== 'always';      // 额度只算策略知识，流程纪律不占
-        if (strategic && drawn >= cap) continue;
         const text = entryTextOf(e, record);        // 分级可见：底子 + 他够得着的层（手册页同源）
         if (used + text.length > maxChars) continue;   // 超长**整条跳过**，不截断半句
         lines.push(`· ${text}`);
         used += text.length;
-        if (strategic) drawn += 1;
     }
     // 一行都没有就别开这个标题（「不产生空标题」）：有档位说档位，有知识说知识
     return lines.length ? [CODEX_HEAD, ...lines].join('\n') : '';

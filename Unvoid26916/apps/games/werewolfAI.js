@@ -568,6 +568,47 @@ function sheriffOrderBlock(session, seatNo) {
     ].join('\n');
 }
 
+/* ---- 他自己留下的心得（经历那一轴，不是手册那一轴） ----
+ *
+ * 每局打完，玩家可以点座位让这个角色自己复盘一次，写下的那条心得进他的狼人杀档案
+ * （`stats.insights`，见 werewolfStore.appendInsight）。这里把**最近几条**装进提示词，
+ * 让下一局的他带着自己上一次的结论上桌。
+ *
+ * **归属（用户 2026-09-17 划的轴）**：手册是**知识**——客观、可复用、别人也适用，将来做主观
+ * 自定义也还是知识/策略/经验条目那一轴；心得是**经历**——私人的、只属于他，今天还没按身份、
+ * 按打法细分，粗得只能算经历。经历那一摊今天都在 `viewBlock` 里拼（记忆在 `selfCard`、判断表、
+ * 自己记的笔记），它跟它们同族，**不进 werewolfCodex**。哪天真按身份/打法细分了，才谈毕业过去。
+ *
+ * 条数与字数是「先看看效果」的口径（用户 2026-09-17 定：最近 3 条）；超长整条跳过、不截半句。
+ * 只在**对局中**用，复盘那两处不加——复盘那道题是「写下新的一条」，把旧三条摆在它面前，
+ * 容易把新的写成旧条的翻版。
+ */
+const INSIGHT_MAX = 3;
+const INSIGHT_MAX_CHARS = 800;
+
+/**
+ * 最近几条心得，**最近的一条在最后**（与 `selfCard` 里那几条记忆同一条读法）。
+ * 每条前面挂一枚标签（第几桌 · 拿的什么牌 · 赢了没有）——那都是他自己打出来的事实。
+ * 没有心得就返回空串（不产生空标题）。
+ * @param {object} record 这个座位自己的档案（路人没有心得，传 null 就返回空串）
+ */
+function insightBlock(record) {
+    const list = (Array.isArray(record?.insights) ? record.insights : [])
+        .filter(i => i && String(i.text || '').trim());
+    if (!list.length) return '';
+    const lines = [];
+    let used = 0;
+    for (const i of list.slice(-INSIGHT_MAX)) {
+        const text = String(i.text).trim();
+        if (used + text.length > INSIGHT_MAX_CHARS) continue;   // 超长**整条跳过**，不截断半句
+        const tags = [i.tableNo ? `第 ${i.tableNo} 桌` : '', i.role ? roleLabel(i.role) : '',
+            i.win === true ? '赢了' : i.win === false ? '输了' : ''].filter(Boolean).join(' · ');
+        lines.push(`· ${tags ? `（${tags}）` : ''}${text}`);
+        used += text.length;
+    }
+    return lines.length ? ['【你自己以前打过的局里留下的心得】', ...lines].join('\n') : '';
+}
+
 /* ---- 视角块 ---- */
 
 /**
@@ -599,6 +640,8 @@ function viewBlock(session, seatNo, record = null) {
     return [
         '【你】',
         selfCard(mine),
+        // 跨局带过来的那一份：他的记忆（在 selfCard 里）+ 他自己复盘写下的心得，挨着读
+        insightBlock(record),
         `你的身份：${view.roleLabel}（${view.faction === 'wolf' ? '狼人阵营' : '好人阵营'}）`,
         view.faction === 'wolf' ? '你是狼人：白天要装成好人，别把同伴供出去；夜里你和同伴一起决定刀谁。' : '',
         view.teammates?.length ? `你的狼同伴：${view.teammates.map(t => `${t.seat} 号 ${t.name}`).join('、')}` : '',

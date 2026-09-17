@@ -46,16 +46,55 @@
 }
 
 /* 顶栏两侧各包一层、且**等宽**：.ww-topbar 是 space-between，右边多一个按钮
-   （对局页有 📜 与 ✕）而左边还是一个返回键时，标题会被挤偏 20px——这道配重就是治它。 */
+   （对局页那一侧有 📜、自动推进钮与 ✕）而左边还是一个返回键时，标题会被挤偏 20px
+   ——这道配重就是治它。 */
 .ww-topbar-l,
 .ww-topbar-r {
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 74px;   /* 两个 34px 按钮 + 6px 间距 */
+    min-width: 114px;   /* 三个 34px 按钮 + 两道 6px 间距（对局页那一侧最宽的样子） */
 }
 
 .ww-topbar-r { justify-content: flex-end; }
+
+/* 自动推进那颗钮（#wwAutoBtn）：不用 emoji，画一个圆——中间一道分割线，
+   左半点亮＝半自动、整圆点亮＝全自动（还没做）、只描边＝关闭。三态看 data-auto。
+   填充画在 ::before（左半边，宽度 0 / 50% / 100%），分割线画在 ::after——
+   两个伪元素里 ::after 后画，所以线始终压在填充之上。 */
+#wwAutoBtn { display: flex; align-items: center; justify-content: center; }
+
+#wwAutoBtn .ww-auto-dot {
+    display: block;
+    width: 17px;
+    height: 17px;
+    position: relative;
+    overflow: hidden;
+    border: 1.6px solid currentColor;
+    border-radius: 50%;
+}
+
+#wwAutoBtn .ww-auto-dot::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    background: var(--accent);
+}
+
+#wwAutoBtn .ww-auto-dot::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1.6px;
+    margin-left: -.8px;
+    background: currentColor;
+}
+
+#wwAutoBtn[data-auto="half"] .ww-auto-dot::before { width: 50%; }
+#wwAutoBtn[data-auto="full"] .ww-auto-dot::before { width: 100%; }
 
 .ww-brand { text-align: center; min-width: 0; }
 
@@ -713,6 +752,10 @@ p.ww-entry-cond { color: var(--muted); font-size: 11px; }
 .ww-modal::-webkit-scrollbar { display: none; }
 .ww-modal h3 { margin: 0 0 4px; font-size: 15px; }
 .ww-modal .ww-modal-sub { margin: 0 0 12px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+/* 半自动那行进度：挂在底栏里（既单独占一条，也接在「你的投票行」下面）。
+   宽度用 100% 而不是 flex:1——底栏那两套布局（横排的 / column 的）都得占满一行 */
+.ww-auto-hint { width: 100%; font-size: 10px; color: var(--muted); line-height: 1.5; text-align: center; }
 
 .ww-choice {
     width: 100%;

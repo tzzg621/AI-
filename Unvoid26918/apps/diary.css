@@ -1,0 +1,467 @@
+/* apps/diary.css — 日记模块样式 */
+
+/* ========== 页面容器 ========== */
+.diary-page {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #fdfcf9;
+    overflow: hidden;
+}
+
+/* ========== 头部 ========== */
+.diary-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 16px 12px;
+    background: #fff;
+    border-bottom: 1px solid #e8e4dc;
+}
+
+.diary-filter {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #d4cfc4;
+    border-radius: 8px;
+    background: #fdfcf9;
+    font-size: 14px;
+    color: #3c3830;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.diary-filter:focus {
+    border-color: #D4A574;
+}
+
+.diary-new-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: linear-gradient(135deg, #D4A574 0%, #C99563 100%);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 0 2px 8px rgba(212, 165, 116, 0.2);
+}
+
+.diary-new-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(212, 165, 116, 0.3);
+}
+
+.diary-new-btn:active {
+    transform: translateY(0);
+}
+
+.diary-new-icon {
+    font-size: 16px;
+}
+
+/* ========== 列表 ========== */
+.diary-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    align-content: start;
+}
+
+.diary-item {
+    background: #fff;
+    border-radius: 12px;
+    padding: 14px 12px;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    border: 1px solid #f0ede6;
+    position: relative;
+    overflow: hidden;
+    min-height: 160px;
+    display: flex;
+    flex-direction: column;
+}
+
+.diary-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 8px;
+    background: linear-gradient(135deg, #D4A574 0%, #C99563 100%);
+    opacity: 0.6;
+}
+
+.diary-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.diary-item:active {
+    transform: translateY(0);
+}
+
+.diary-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    margin-top: 4px;
+}
+
+.diary-item-date {
+    font-size: 12px;
+    font-weight: 600;
+    color: #D4A574;
+}
+
+.diary-item-meta {
+    font-size: 14px;
+    display: flex;
+    gap: 4px;
+}
+
+.diary-item-character {
+    font-size: 11px;
+    color: #8a8378;
+    margin-bottom: 8px;
+}
+
+.diary-item-preview {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #3c3830;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    flex: 1;
+}
+
+/* ========== 详情页 ========== */
+.diary-detail-header {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 14px 16px 22px;   /* 下留 22px：12px 的装饰条占掉底下 12px，还能留 10px 空隙 */
+    /* 不透明：正文从下面滚过时被挡住，不会糊在返回键上 */
+    background: #fdfcf9;
+    position: relative;
+    z-index: 10;
+}
+
+/* 原本挂在纸张上缘的装饰色条，改挂页头下边缘：横贯整页、跟着页头固定，
+   不随正文滚走——滚动时顶部就一直是这条干净的横线 */
+.diary-detail-header::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 12px;
+    background: linear-gradient(135deg, #D4A574 0%, #C99563 100%);
+    opacity: 0.7;
+}
+
+/* 返回：去掉圆角方框，只用文字和颜色 */
+.diary-back-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 4px 6px 0;
+    background: none;
+    border: none;
+    color: #8a8378;
+    font-size: 14px;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.diary-back-btn:hover {
+    background: none;
+    color: #D4A574;
+}
+
+.diary-back-btn:active {
+    opacity: 0.6;
+}
+
+.diary-delete-btn {
+    padding: 8px 14px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #d9534f;
+    border: 1px solid #d9534f;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.diary-delete-btn:hover {
+    background: #d9534f;
+    color: #fff;
+}
+
+.diary-detail-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 16px 20px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+}
+
+.diary-detail {
+    background: #fff;
+    border-radius: 0;
+    padding: 26px 24px 28px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    max-width: 600px;
+    width: 100%;
+    position: relative;
+    margin-top: 20px;
+}
+
+.diary-detail-date {
+    font-size: 18px;
+    font-weight: 600;
+    color: #D4A574;
+    margin-bottom: 8px;
+}
+
+.diary-detail-character {
+    font-size: 13px;
+    color: #8a8378;
+    margin-bottom: 16px;
+}
+
+.diary-detail-meta {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #f0ede6;
+}
+
+.diary-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 14px;
+    color: #5c5649;
+}
+
+.diary-detail-text {
+    font-size: 15px;
+    line-height: 1.8;
+    color: #3c3830;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin-bottom: 20px;
+}
+
+.diary-detail-topics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 16px;
+    border-top: 1px solid #f0ede6;
+    margin-bottom: 20px;
+}
+
+.diary-topic-tag {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #f5f3ef;
+    color: #8a8378;
+    border-radius: 12px;
+    font-size: 12px;
+}
+
+.diary-detail-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 20px;
+    border-top: 1px solid #f0ede6;
+}
+
+/* 「重要」开关：标过的日记会一直进该角色生成时的提示词 */
+.diary-star-btn {
+    padding: 10px 20px;
+    background: transparent;
+    color: #8a8378;
+    border: 1px solid #e8e2d6;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: none;
+}
+
+.diary-star-btn:hover {
+    background: #fdf8f1;
+    border-color: #D4A574;
+    color: #C99563;
+}
+
+.diary-star-btn.is-starred {
+    background: #fdf6ea;
+    border-color: #D4A574;
+    color: #B8823F;
+}
+
+/* 列表卡上的重要角标 */
+.diary-item-star {
+    font-size: 12px;
+    line-height: 1;
+}
+
+.diary-detail .diary-delete-btn {
+    padding: 10px 24px;
+    background: transparent;
+    color: #c9534f;
+    border: 1px solid #e8d4d3;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: none;
+}
+
+.diary-detail .diary-delete-btn:hover {
+    background: #fff5f5;
+    border-color: #d9534f;
+    color: #d9534f;
+}
+
+/* ========== 生成中占位卡（在列表里，不挡着读别篇） ========== */
+.diary-item-placeholder {
+    cursor: default;
+    background: #faf8f4;
+    border-style: dashed;
+    border-color: #e6e0d4;
+}
+
+.diary-item-placeholder:hover {
+    transform: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.diary-placeholder-pen {
+    display: inline-block;
+    font-size: 14px;
+    animation: diary-writing 2s ease-in-out infinite;
+}
+
+.diary-placeholder-lines {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 2px;
+}
+
+.diary-placeholder-line {
+    height: 9px;
+    border-radius: 5px;
+    background: linear-gradient(90deg, #efece5 25%, #f8f6f2 37%, #efece5 63%);
+    background-size: 400% 100%;
+    animation: diary-shimmer 1.6s ease infinite;
+}
+
+.diary-placeholder-line:nth-child(2) {
+    width: 86%;
+}
+
+.diary-placeholder-line:nth-child(3) {
+    width: 64%;
+}
+
+@keyframes diary-writing {
+    0%, 100% {
+        transform: translateX(0) rotate(0deg);
+    }
+    25% {
+        transform: translateX(3px) rotate(5deg);
+    }
+    75% {
+        transform: translateX(-3px) rotate(-5deg);
+    }
+}
+
+@keyframes diary-shimmer {
+    0% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0 50%;
+    }
+}
+
+/* ========== 状态提示 ========== */
+.diary-loading,
+.diary-empty,
+.diary-error {
+    text-align: center;
+    padding: 40px 20px;
+    color: #8a8378;
+    font-size: 14px;
+}
+
+.diary-error {
+    color: #d9534f;
+}
+
+/* ========== Toast 提示 ========== */
+.diary-toast {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.8);
+    background: rgba(60, 56, 48, 0.92);
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 10000;
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+}
+
+.diary-toast-show {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+/* ========== 滚动条样式 ========== */
+.diary-list::-webkit-scrollbar,
+.diary-detail-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.diary-list::-webkit-scrollbar-track,
+.diary-detail-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.diary-list::-webkit-scrollbar-thumb,
+.diary-detail-content::-webkit-scrollbar-thumb {
+    background: #d4cfc4;
+    border-radius: 3px;
+}
+
+.diary-list::-webkit-scrollbar-thumb:hover,
+.diary-detail-content::-webkit-scrollbar-thumb:hover {
+    background: #bfb9ad;
+}

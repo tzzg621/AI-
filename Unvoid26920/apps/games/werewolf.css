@@ -1,0 +1,1255 @@
+/* apps/games/werewolf.css — 狼人杀（风格照末日安全屋：暖色羊皮纸）
+   类名一律 ww- 前缀；根节点 #werewolfRoot（挂在游戏中心 overlay 内） */
+
+#werewolfRoot {
+    --ink: #302c28;
+    --muted: #8d8177;
+    --paper: #f5f0e8;
+    --paper-deep: #e9dfd1;
+    --card: rgba(255, 255, 255, .72);
+    --accent: #a75d3d;
+    --accent-dark: #70412f;
+    --line: rgba(120, 100, 80, .16);
+    --night: #4b4453;
+    height: 100%;
+    overflow: hidden;
+    color: var(--ink);
+    background:
+        radial-gradient(circle at 85% 8%, rgba(190, 132, 83, .18), transparent 28%),
+        linear-gradient(145deg, #f7f1e8, #e9dfd4);
+    font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", sans-serif;
+}
+
+#werewolfRoot * { box-sizing: border-box; }
+
+.ww-app { height: 100%; display: flex; flex-direction: column; }
+
+/* ---------------- 顶栏 ---------------- */
+
+.ww-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 16px 10px;
+    flex-shrink: 0;
+}
+
+.ww-topbar button {
+    border: 0;
+    color: var(--ink);
+    background: rgba(255, 255, 255, .55);
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+/* 顶栏两侧各包一层、且**等宽**：.ww-topbar 是 space-between，右边多一个按钮
+   （对局页那一侧有 📜、自动推进钮与 ✕）而左边还是一个返回键时，标题会被挤偏 20px
+   ——这道配重就是治它。 */
+.ww-topbar-l,
+.ww-topbar-r {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 114px;   /* 三个 34px 按钮 + 两道 6px 间距（对局页那一侧最宽的样子） */
+}
+
+.ww-topbar-r { justify-content: flex-end; }
+
+/* 自动推进那颗钮（#wwAutoBtn）：不用 emoji，画一个圆——中间一道分割线，
+   左半点亮＝半自动、整圆点亮＝全自动（还没做）、只描边＝关闭。三态看 data-auto。
+   填充画在 ::before（左半边，宽度 0 / 50% / 100%），分割线画在 ::after——
+   两个伪元素里 ::after 后画，所以线始终压在填充之上。 */
+#wwAutoBtn { display: flex; align-items: center; justify-content: center; }
+
+#wwAutoBtn .ww-auto-dot {
+    display: block;
+    width: 17px;
+    height: 17px;
+    position: relative;
+    overflow: hidden;
+    border: 1.6px solid currentColor;
+    border-radius: 50%;
+}
+
+#wwAutoBtn .ww-auto-dot::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    background: var(--accent);
+}
+
+#wwAutoBtn .ww-auto-dot::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1.6px;
+    margin-left: -.8px;
+    background: currentColor;
+}
+
+#wwAutoBtn[data-auto="half"] .ww-auto-dot::before { width: 50%; }
+#wwAutoBtn[data-auto="full"] .ww-auto-dot::before { width: 100%; }
+
+.ww-brand { text-align: center; min-width: 0; }
+
+.ww-brand small {
+    display: block;
+    color: var(--muted);
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+.ww-brand strong { font-size: 14px; letter-spacing: 1px; }
+
+/* ---------------- 滚动区 ---------------- */
+
+.ww-scroll {
+    flex: 1;
+    overflow: auto;
+    padding: 0 13px 18px;
+    scrollbar-width: none;
+}
+
+.ww-scroll::-webkit-scrollbar { display: none; }
+
+/* ---------------- 底部分栏 ---------------- */
+
+.ww-tabbar {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 6px 10px 10px;
+    border-top: 1px solid var(--line);
+    background: rgba(255, 255, 255, .5);
+}
+
+.ww-tab {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 7px 4px;
+    border-radius: 14px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.ww-tab i { font-style: normal; font-size: 16px; }
+
+.ww-tab.active {
+    background: rgba(167, 93, 61, .12);
+    color: var(--accent);
+}
+
+/* ---------------- 区块标题 ---------------- */
+
+.ww-section-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 14px 2px 8px;
+}
+
+.ww-section-title strong { font-size: 13px; }
+.ww-section-title span { font-size: 10px; color: var(--muted); }
+
+/* 组说明写进 .ww-section-title 的 span 位：给个宽度上限。
+   父容器是 space-between，不设上限时长说明会把 <strong>（组名）压成一条竖线。 */
+.ww-section-title span.ww-group-desc { flex: 0 1 62%; text-align: right; line-height: 1.5; }
+
+/* 手册页的阵营层（狼 / 好人 / 两边通用）——比组标题粗一档，两层一眼分得开。
+   只有手册页用它；下方那条横线是它和组标题拉开层次的主要手段。 */
+.ww-camp-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 18px 2px 6px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ww-camp-title strong { font-size: 14px; }
+.ww-camp-title span { font-size: 10px; color: var(--muted); }
+
+/* ---------------- 英雄卡（房间页顶部） ---------------- */
+
+.ww-hero {
+    position: relative;
+    overflow: hidden;
+    margin: 2px 0 14px;
+    padding: 20px 18px 16px;
+    border-radius: 25px;
+    background: linear-gradient(135deg, rgba(70, 60, 56, .96), rgba(117, 72, 55, .94));
+    color: #fff8ee;
+    box-shadow: 0 12px 24px rgba(77, 49, 35, .18);
+}
+
+.ww-hero .ww-eyebrow {
+    font-size: 10px;
+    letter-spacing: 3px;
+    font-weight: 700;
+    color: #e9b993;
+    text-transform: uppercase;
+}
+
+.ww-hero h2 { margin: 6px 0 4px; font-size: 21px; letter-spacing: 1px; }
+.ww-hero p { margin: 0; font-size: 11px; color: rgba(255, 248, 238, .78); line-height: 1.6; }
+
+.ww-hero-moon {
+    position: absolute;
+    right: 18px;
+    top: 16px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #f5d7ad;
+    box-shadow: 0 0 26px rgba(245, 215, 173, .36);
+}
+
+/* ---------------- 卡片 ---------------- */
+
+.ww-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    border-radius: 17px;
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+}
+
+.ww-card-icon {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 13px;
+    background: rgba(233, 223, 209, .8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+}
+
+.ww-card-main { flex: 1; min-width: 0; }
+
+.ww-card-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.ww-card-desc {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.ww-card-meta { margin-top: 4px; font-size: 10px; color: var(--muted); }
+
+/* 卡片右侧的动作字（进入 › / 查看 ›） */
+.ww-card-go { flex-shrink: 0; color: var(--accent); font-size: 12px; }
+
+/* 桌卡：已经开局、或不是我参与的桌，压低一点存在感 */
+.ww-card.is-quiet { background: rgba(255, 255, 255, .5); box-shadow: none; }
+
+/* 分类卡、桌卡、规则卡都是 <button>，需要显式声明外框与字体 */
+.ww-type-card,
+.ww-table-card,
+.ww-rules-card { width: 100%; text-align: left; font-family: inherit; color: inherit; cursor: pointer; }
+
+/* 规则卡片：稍暗的强调卡 */
+.ww-rules-card {
+    border: 1px dashed rgba(167, 93, 61, .42);
+    background: rgba(241, 223, 208, .72);
+}
+
+/* ---------------- 活动页商店 ---------------- */
+
+/* 整张卡就是购买按钮（跟规则卡同一种卡）；价钱站的是 .ww-card-go 那个位置 */
+.ww-shop-card { width: 100%; text-align: left; font-family: inherit; color: inherit; cursor: pointer; }
+
+.ww-shop-price {
+    flex-shrink: 0;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* 买不起：价钱压淡（卡照旧可点——点一下告诉你还差多少，比按不动的按钮清楚） */
+.ww-shop-card.is-poor .ww-shop-price { color: var(--muted); font-weight: 400; }
+
+/* ---------------- 按钮 ---------------- */
+
+.ww-btn {
+    border: 0;
+    border-radius: 11px;
+    color: #fff;
+    background: var(--accent);
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ww-btn.ghost { background: #e8ddd1; color: #6d5749; }
+.ww-btn.danger { background: #b0685c; }
+.ww-btn.block { width: 100%; }
+.ww-btn:disabled { cursor: default; opacity: .42; }
+
+.ww-small-button {
+    border: 0;
+    border-radius: 11px;
+    background: var(--accent);
+    color: #fff;
+    padding: 8px 9px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ww-small-button.ghost { background: #e8ddd1; color: #6d5749; }
+.ww-small-button:disabled { cursor: default; opacity: .42; }
+
+/* 底部动作条 */
+.ww-bottom {
+    display: flex;
+    position: relative;   /* @ 候选浮层挂在它上沿往上弹 */
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 8px 13px 12px;
+}
+
+.ww-bottom button {
+    flex: 1;
+    border: 0;
+    border-radius: 14px;
+    padding: 11px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    color: #6d5749;
+    background: #e8ddd1;
+    cursor: pointer;
+}
+
+.ww-bottom button.primary { color: #fff; background: var(--accent); }
+.ww-bottom button:disabled { cursor: default; opacity: .42; }
+
+/* ---------------- 标签 pill ---------------- */
+
+.ww-pill {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    background: #f1dfd0;
+    color: #96583c;
+}
+
+.ww-pill.wolf { background: #e6d7dd; color: #8a4a63; }
+.ww-pill.good { background: #dde8d8; color: #5d7a4e; }
+.ww-pill.muted { background: rgba(233, 223, 209, .9); color: var(--muted); }
+/* 警徽：公开身份，用暖金色与「底牌/判断」都分得开 */
+.ww-pill.sheriff { background: #f3e3bb; color: #8a6414; }
+/* 上警：竞选期间才出现的中性标签。**用冷色**——暖色那一族已经被底牌、判断、警徽占满了，
+   冷色一眼就能看出它说的是「这一局正走到哪一步」，不是在说这个人是什么身份 */
+.ww-pill.candidate { background: #dbe4ee; color: #47617f; }
+
+/* ---------------- 座位网格 ---------------- */
+
+.ww-seats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 9px;
+}
+
+.ww-seats.single { grid-template-columns: 1fr; }
+
+.ww-seat {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+    min-width: 0;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.ww-seat.is-empty {
+    border-style: dashed;
+    border-color: rgba(167, 93, 61, .34);
+    background: rgba(255, 255, 255, .42);
+    box-shadow: none;
+}
+
+.ww-seat.is-me { border-color: rgba(167, 93, 61, .6); background: rgba(241, 223, 208, .8); }
+.ww-seat.is-reserved { opacity: .72; }
+.ww-seat.is-dead { opacity: .5; }
+.ww-seat:disabled { cursor: default; }
+
+.ww-seat-num {
+    width: 22px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+}
+
+.ww-avatar {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #e0e0e0;
+}
+
+.ww-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+.ww-avatar-fallback {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #e3d8ca;
+    color: #8d8177;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.ww-seat-main { flex: 1; min-width: 0; }
+
+.ww-seat-name {
+    font-size: 12px;
+    font-weight: 700;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ww-seat-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--muted);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ww-seat-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+
+/* ---------------- 留言流 / 发言流 ---------------- */
+
+.ww-line {
+    padding: 9px 11px;
+    margin-bottom: 7px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .62);
+    border: 1px solid rgba(255, 255, 255, .7);
+    font-size: 11.5px;
+    line-height: 1.62;
+}
+
+.ww-line-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 3px;
+}
+
+.ww-line.system { background: rgba(241, 223, 208, .6); color: #6d5749; }
+/* 遗言：同一个人最后一段话，压一点灰、左边一道竖线，翻流水时一眼看得出来 */
+.ww-line.words { background: rgba(233, 223, 209, .58); border-left: 2px solid rgba(150, 88, 60, .3); }
+.ww-line.mine { background: rgba(228, 236, 224, .78); }
+.ww-line.night { background: rgba(75, 68, 83, .1); }
+/* 狼队频道：私有事件，只出现在「我这一局是狼」的那块屏幕上 */
+.ww-line.whisper {
+    background: rgba(138, 74, 99, .09);
+    color: #6b4a58;
+    border-left: 2px solid rgba(138, 74, 99, .34);
+}
+
+.ww-line .ww-line-body { white-space: pre-wrap; word-break: break-word; }
+
+/* 投票那条消息尾巴上的小圆点：花钻石看这一票的心声（道具，入口见 werewolf.js 的 openHeart）。
+   形状照灵犀的提及点（apps/lingxi.css 的 .lx-mention-dot），配色换成这儿的暖色；
+   那边是绝对定位挂在卡片角上，这边跟在票型文字后面，所以用 inline-grid 跟文字同一行。 */
+.ww-heart-dot {
+    display: inline-grid;
+    width: 15px;
+    height: 15px;
+    margin-left: 5px;
+    padding: 0;
+    place-items: center;
+    vertical-align: -3px;
+    border: 1px solid rgba(167, 93, 61, .3);
+    border-radius: 50%;
+    color: var(--accent);
+    background: rgba(241, 223, 208, .8);
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+    opacity: .75;
+    transition: transform .16s ease, opacity .16s ease, background .16s ease;
+}
+
+.ww-heart-dot::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.ww-heart-dot:hover { opacity: 1; background: rgba(233, 209, 190, .95); transform: scale(1.12); }
+.ww-heart-dot:active { transform: scale(.94); }
+
+/* 弹层里那两段：一句解释（灰的），以及心声正文（像引了句话） */
+.ww-heart-hint { font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+
+.ww-heart-text {
+    padding: 10px 12px;
+    border-left: 2px solid rgba(167, 93, 61, .3);
+    border-radius: 0 10px 10px 0;
+    background: rgba(241, 223, 208, .5);
+    color: #6d5749;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* ---------------- 标记（主视角预设标签） ---------------- */
+
+.ww-mark-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+
+.ww-mark-chip {
+    border: 1px solid rgba(167, 93, 61, .34);
+    background: rgba(255, 255, 255, .7);
+    color: #6d5749;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.ww-mark-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ---------------- 状态点 / 输入 ---------------- */
+
+.ww-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    display: inline-block;
+}
+
+.ww-input {
+    width: 100%;
+    min-height: 62px;
+    resize: vertical;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .82);
+    padding: 9px 11px;
+    font-size: 12px;
+    line-height: 1.6;
+    font-family: inherit;
+    color: var(--ink);
+}
+
+.ww-input:focus { outline: none; border-color: rgba(167, 93, 61, .5); }
+
+/* 狼队那一句密谈：一行就够，别占掉半屏（.ww-input 是发言框的尺寸） */
+.ww-note { min-height: 38px; height: 38px; resize: none; }
+
+/* ---------------- 空态 ---------------- */
+
+.ww-empty {
+    padding: 26px 14px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 11.5px;
+    line-height: 1.7;
+}
+
+/* ---------------- 角色档案卡（「我的」页） ---------------- */
+
+.ww-codex-card { display: block; padding: 13px; }
+
+.ww-codex-head { display: flex; align-items: center; gap: 10px; }
+.ww-codex-head .ww-avatar,
+.ww-codex-head .ww-avatar-fallback { width: 46px; height: 46px; font-size: 19px; }
+
+.ww-codex-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.ww-codex-name strong { font-size: 15px; }
+.ww-codex-tiers { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.ww-codex-why {
+    margin: 10px 0 0;
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: var(--muted);
+}
+
+/* 档位徽章：水平按档上色，悟性留白框（两枚并排时不抢眼） */
+.ww-tier-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    background: #f1dfd0;
+    color: #96583c;
+}
+
+.ww-tier-badge.is-none { background: rgba(233, 223, 209, .9); color: var(--muted); font-weight: 400; }
+.ww-tier-badge.tier-beginner { background: #e7e2da; color: #7d7367; }
+.ww-tier-badge.tier-rookie { background: #e2e8dc; color: #5d7a4e; }
+.ww-tier-badge.tier-normal { background: #dde6ec; color: #4b6b83; }
+.ww-tier-badge.tier-veteran { background: #ece1d2; color: #9a6a33; }
+.ww-tier-badge.tier-expert { background: #efdcd6; color: #a2483a; }
+
+.ww-tier-badge.flair-dull,
+.ww-tier-badge.flair-steady,
+.ww-tier-badge.flair-quick,
+.ww-tier-badge.flair-sharp {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--muted);
+}
+
+/* ---------------- 手册条目 ---------------- */
+
+.ww-entry {
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    border-radius: 15px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+}
+
+.ww-entry-head { display: flex; align-items: center; gap: 8px; }
+.ww-entry-head strong { flex: 1; font-size: 12.5px; }
+
+.ww-entry-tier {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    background: rgba(233, 223, 209, .9);
+    color: var(--muted);
+}
+
+/* 条目角标上的房型（只标有房型门槛的，通用条目不出这枚）。
+   与档位角标同形、**用冷色**：一眼能分出「这是哪一档」和「这是哪张桌」
+   （冷色照 .ww-pill.candidate 的先例）。排在档位之前——先看见门槛，再看见深浅。 */
+.ww-entry-room {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    background: #dbe4ee;
+    color: #47617f;
+}
+
+.ww-entry p { margin: 6px 0 0; font-size: 11.5px; line-height: 1.72; color: #4a443e; }
+
+/* 没点亮的：标题留着、正文换成点亮条件，整卡压暗一档（照 .ww-card.is-quiet 的观感） */
+.ww-entry.is-locked { background: rgba(255, 255, 255, .42); box-shadow: none; }
+.ww-entry.is-locked .ww-entry-head strong { color: var(--muted); }
+.ww-entry.is-locked p { color: var(--muted); font-size: 11px; }
+
+/* 「还锁着的层」那一行（亮着的卡片上也有）。写成 `p.` 打头是为了压过上面 `.ww-entry p`
+   的 11.5px（同权重、靠后生效）；`.ww-entry.is-locked p` 权重更高，锁着的卡片外观一字不变。 */
+p.ww-entry-cond { color: var(--muted); font-size: 11px; }
+
+/* ---------------- 这一桌的做法约定（顶栏 📜 那个面板） ----------------
+   模板卡就是 .ww-entry：点卡身勾上/取消（未选中的整卡压暗，沿用上面那套），
+   编辑态那张卡里换成「名字一行 + 正文一框 + 三个小按钮」。 */
+
+.ww-rule-tpl[role="button"] {
+    width: 100%;
+    text-align: left;      /* 卡是 div[role=button]，这三行把它拉回块级文字的排布 */
+    font-family: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.ww-rule-name { flex: 1; min-width: 0; }        /* head 里与 ✎ 同一行 */
+.ww-rule-text { margin-top: 8px; }
+.ww-rule-actions { display: flex; gap: 6px; margin-top: 8px; }
+.ww-rule-actions .ww-small-button { flex: 1; }
+.ww-small-button.ww-rule-del { color: #8d3f33; }   /* 比 .ghost 的正文色再重一点 */
+
+/* head 里的 ✎ / ✕：长在可点的卡里，得比正文更低调（同 .ww-rule-tpl[role=button] 的层叠） */
+.ww-rule-icon {
+    flex-shrink: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.ww-rule-count { margin-top: 6px; text-align: right; font-size: 11px; color: var(--muted); }
+
+/* ---------------- 弹窗 ---------------- */
+
+.ww-modal-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(42, 33, 29, .48);
+    backdrop-filter: blur(4px);
+}
+
+.ww-modal {
+    width: min(100%, 330px);
+    max-height: 82%;
+    overflow: auto;
+    border-radius: 22px;
+    background: var(--paper);
+    padding: 16px;
+    box-shadow: 0 18px 50px rgba(35, 23, 16, .28);
+    scrollbar-width: none;
+}
+
+.ww-modal::-webkit-scrollbar { display: none; }
+.ww-modal h3 { margin: 0 0 4px; font-size: 15px; }
+.ww-modal .ww-modal-sub { margin: 0 0 12px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+/* 半自动那行进度：挂在底栏里（既单独占一条，也接在「你的投票行」下面）。
+   宽度用 100% 而不是 flex:1——底栏那两套布局（横排的 / column 的）都得占满一行 */
+.ww-auto-hint { width: 100%; font-size: 10px; color: var(--muted); line-height: 1.5; text-align: center; }
+
+.ww-choice {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, .8);
+    border-radius: 13px;
+    padding: 10px;
+    margin-bottom: 7px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.ww-choice:hover { background: #f3e7db; }
+.ww-choice:disabled { opacity: .45; cursor: default; }
+.ww-choice.danger { color: #8d3f33; border-color: rgba(176, 104, 92, .46); background: rgba(255, 245, 242, .86); }
+
+/* 邀请面板里的一行：头像 + 名字 + 「邀请 ›」 */
+.ww-choice-row { display: flex; align-items: center; gap: 8px; }
+.ww-choice-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ww-choice-go { flex-shrink: 0; color: var(--accent); font-size: 11px; }
+
+/* ---------------- 许愿（开局挑身份） ---------------- */
+
+.ww-wish-hint { font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+
+/* 这张板子摊开的样子：两列，一格一个身份 + 这份牌有几张 */
+.ww-wish-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin: 2px 0 4px;
+    max-height: 46vh;
+    overflow-y: auto;
+}
+
+.ww-wish-role {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, .82);
+    border-radius: 12px;
+    padding: 9px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.ww-wish-role span { font-size: 10px; color: var(--muted); }
+.ww-wish-role:hover { background: #f3e7db; }
+
+/* 挑中的那一格：描边加粗 + 底色暖一点（跟 hover 分得开） */
+.ww-wish-role.is-picked {
+    border-color: var(--accent);
+    background: rgba(241, 223, 208, .92);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ww-wish-role.is-picked span { color: var(--accent-dark); }
+
+.ww-modal-close {
+    width: 100%;
+    border: 0;
+    border-radius: 13px;
+    background: #e7ded5;
+    color: #6d5749;
+    padding: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    margin-top: 4px;
+}
+
+/* ---------------- toast ---------------- */
+
+.ww-toast {
+    position: absolute;
+    top: 55px;
+    left: 50%;
+    transform: translate(-50%, -7px);
+    max-width: 78%;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(48, 44, 40, .92);
+    color: #fff8ee;
+    font-size: 11px;
+    opacity: 0;
+    pointer-events: none;
+    transition: .25s ease;
+    z-index: 30;
+}
+
+.ww-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ================================================================ */
+/*  对局页                                                          */
+/* ================================================================ */
+
+/* 名字与状态各占一行（span 默认 inline 会把两行挤成一行） */
+.ww-seat-name,
+.ww-seat-sub { display: block; }
+
+/* ---- 阶段条 ---- */
+
+/* 阶段条 + 浮在它下面的「场上」面板，这层壳子只为给面板当定位参照：
+   阶段条照旧在流里占位（吸顶靠的是"在 .ww-scroll 之外"，跟占不占位是两件事），
+   面板 absolute 挂在它下沿 —— 面板不再从滚动区身上拿走那 147px，
+   所以展开/收起时发言流（含滚动位置）一点不动，不需要任何补偿。
+   **壳子不留下边距**：阶段条原来下面那 9px 是一块永远露不出内容的空底色（它在滚动区外，
+   滚上来的字被裁在滚动区顶边），用户 2026-09-15 说收起时也不要留 ⇒ 直接贴着滚动区，
+   面板的 top:100% 也就正好落在阶段条下沿。 */
+.ww-stage {
+    position: relative;
+    flex-shrink: 0;
+    margin: 0;
+}
+
+/* 面板开着时，两块当**一张卡**看：贴合的那两条边拍平（下面那圈圆角留给收起来时的阶段条），
+   面板顶上那道白描边也断开 —— 接缝处不留空底色，只剩「上深下浅」一次换色。 */
+.ww-stage.open .ww-phase { border-radius: 16px 16px 0 0; }
+
+.ww-phase {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;         /* 挂在 .ww-scroll 之外，别被压 */
+    margin: 0 13px;         /* 左右那 13px 原来吃的是滚动区的 padding，搬出来自己给 */
+    padding: 9px 12px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(70, 60, 56, .96), rgba(117, 72, 55, .94));
+    box-shadow: 0 10px 24px rgba(60, 42, 32, .18);
+    color: #fff6ea;
+}
+
+.ww-phase-main { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.ww-phase-main strong {
+    font-size: 12.5px;
+    letter-spacing: .4px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ww-phase-main .ww-dot {
+    color: #f5d7ad;
+    box-shadow: 0 0 8px rgba(245, 215, 173, .9);
+}
+
+.ww-phase-sub {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
+    font-size: 9.5px;
+    color: rgba(255, 246, 234, .72);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* 阶段条右侧那颗展开/收起「场上」的按钮 */
+.ww-phase-more {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 246, 234, .16);
+    color: #fff6ea;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.ww-phase-more.open { background: rgba(255, 246, 234, .3); }
+
+/* ---- 「场上」小面板：一行 6 个的座位缩略 ----
+   与主视图那份 4 列大格子是**两套类名**（.ww-seat / .ww-seats 的选择器在 bindApp 与
+   E2E 里都是全局抓的，多一份会互相污染），这里一律用 .ww-mini-*。
+
+   **它是覆盖式**：绝对定位挂在阶段条下沿（.ww-stage 那道壳子），不在流里。
+   这样开合不改滚动区几何 —— 发言流不会被推走，也不需要滚动补偿；代价是它盖住的那一截
+   在开着的时候看不见（**feed 最开头那截尤甚**：壳子不留边距之后，面板顶边与滚动区顶边齐平，
+   它盖住的就是**正好跟它一样高**的一段，12 人局 136px——滚不出来，
+   只能先收起面板：滚动能把中段送进来，唯独送不进负数位置的开头）。
+   取舍过程见 AI/06 2026-09-15。
+
+   高度是算出来的：行高 56px × 人数行数 + 内边距 + 描边，12 人两行 136px。
+   **所以不设 max-height**——名字长短、有没有角标都不参与撑高，溢出只在自己那一格里省略号收尾。
+   行高 56 = 上下内边距 8 + 座号 10 + 头像 24 + 名字 12 + 两个 1px 的间隙。 */
+
+.ww-board {
+    position: absolute;
+    top: 100%;              /* 紧贴阶段条下沿：中间不留空底色（两块当一块看，用户 2026-09-15 定） */
+    left: 13px;
+    right: 13px;            /* 原来那对左右 13px 的缝改由定位给 */
+    z-index: 5;             /* 盖住滚动区；标记浮层是 z-index 20，仍压在它上面 */
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    grid-auto-rows: 56px;
+    gap: 5px;
+    padding: 9px;
+    border-radius: 0 0 16px 16px;   /* 上半圈拍平：跟阶段条拼成一整块，只有下面那圈是圆的 */
+    border: 1px solid rgba(255, 255, 255, .78);
+    border-top: 0;                  /* 接缝不留白线：白描边在贴合的那条边上断开 */
+    /* 浮在文字上，底必须不透明：原来是 var(--card)（.72 的半透明白），衬纸底没问题，
+       压在发言流上会透字 */
+    background: var(--paper);
+    /* 阴影比原来重一点：它现在压在内容上，下沿要跟滚过去的文字分得开 */
+    box-shadow: 0 8px 18px rgba(60, 42, 32, .12);
+}
+
+.ww-mini-seat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 4px 2px;
+    min-width: 0;
+    border: 1px solid rgba(255, 255, 255, .78);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .62);
+    font-family: inherit;
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.ww-mini-seat:disabled { cursor: default; }
+
+/* 离场：整格灰暗——这就是「出局」的表示，不再写字 */
+.ww-mini-seat.is-dead { opacity: .34; filter: grayscale(1); }
+
+.ww-mini-seat.is-me { border-color: rgba(167, 93, 61, .6); background: rgba(241, 223, 208, .8); }
+
+.ww-mini-seat.is-turn {
+    border-color: rgba(167, 93, 61, .75);
+    box-shadow: 0 0 0 2px rgba(167, 93, 61, .18);
+}
+
+.ww-mini-num { height: 10px; font-size: 9px; font-weight: 700; line-height: 10px; color: var(--muted); }
+
+.ww-mini-seat .ww-avatar,
+.ww-mini-seat .ww-avatar-fallback { width: 24px; height: 24px; font-size: 11px; }
+
+.ww-mini-name {
+    width: 100%;
+    height: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 12px;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* 头像和挂在它角上的角标。四个角各有分工，一个角只放一样东西：
+     右上 = 视角里**明确知道**的身份（visibleRoleOf：自己的、狼同伴的、翻过牌的、明牌局出局的、局终全场）
+     右下 = 我贴的标签（一人一个）
+     左下 = **留给金水／银水**：还没做，位置先占住——它不占「一人一个」那个名额，
+            一个角色除了标签之外还能再给个金水，同属主观信息。标记一律不代表事实。
+   角标一律**常驻**（没内容时靠下面那条 :empty 藏起来），不是有内容才建：这样就地更新只改文字、
+   不用管增删。 */
+.ww-mini-face { position: relative; display: inline-flex; }
+
+.ww-mini-badge {
+    position: absolute;
+    right: -2px;              /* 压在头像角上、往外探一点，不挡脸 */
+    width: 12px;
+    height: 12px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 12px;
+    text-align: center;
+}
+
+/* 事实：深墨底，像盖上去的印 */
+.ww-mini-badge.role { top: -2px; background: var(--ink); color: #fff8ee; }
+
+/* 判断：暖色底，跟上面那块分得开 */
+.ww-mini-badge.mark { bottom: -2px; background: var(--accent); color: #fff; }
+
+/* 警徽：公开的身份，与「我贴的判断」相反方向摆（左上 = 别人也知道的事） */
+.ww-mini-badge.sheriff { left: -2px; top: -2px; background: #b8860b; color: #fff8ee; }
+
+.ww-mini-badge:empty { display: none; }
+
+/* ---- 我的身份牌 ---- */
+
+.ww-identity {
+    margin-bottom: 9px;
+    padding: 10px 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, .78);
+    background: var(--card);
+    box-shadow: 0 5px 14px rgba(92, 68, 50, .05);
+}
+
+.ww-identity.good { border-color: rgba(93, 122, 78, .34); background: rgba(221, 232, 216, .62); }
+.ww-identity.wolf { border-color: rgba(138, 74, 99, .34); background: rgba(230, 215, 221, .62); }
+.ww-identity-head { display: flex; align-items: baseline; gap: 8px; }
+.ww-identity-head small { font-size: 9px; letter-spacing: 2px; color: var(--muted); }
+.ww-identity-head strong { font-size: 14px; }
+.ww-identity p { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: #6d5749; }
+.ww-identity .ww-check-latest { font-style: normal; font-weight: 700; color: #8a4a63; }
+
+/* ---- 紧凑座位（对局页一屏放得下全桌） ----
+   列数由板子给（tableColumns，默认 3 = 6 人局的 3×2）；12 人局是 4 列 × 3 行。
+   座位卡本身是同一个尺寸，换的只是横排几个 —— 加列就把整桌压矮一行。 */
+
+.ww-seats.compact {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.ww-seats.compact.c4 { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+
+.ww-seats.compact .ww-seat {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 5px;
+    border-radius: 14px;
+    text-align: center;
+}
+
+.ww-seats.compact .ww-seat-num { width: 100%; font-size: 9px; }
+.ww-seats.compact .ww-avatar,
+.ww-seats.compact .ww-avatar-fallback { width: 28px; height: 28px; font-size: 13px; }
+.ww-seats.compact .ww-seat-main { width: 100%; }
+.ww-seats.compact .ww-seat-name { font-size: 11px; }
+.ww-seats.compact .ww-seat-sub { font-size: 9px; margin-top: 1px; }
+.ww-seats.compact .ww-seat-tags { justify-content: center; }
+
+/* 该他动了：描一圈暖色，但不说他是什么身份 */
+.ww-seat.is-turn {
+    border-color: rgba(167, 93, 61, .75);
+    box-shadow: 0 0 0 2px rgba(167, 93, 61, .18), 0 5px 14px rgba(92, 68, 50, .06);
+}
+
+/* ---- 发言流 ---- */
+
+.ww-line-head .ww-avatar,
+.ww-line-head .ww-avatar-fallback { width: 18px; height: 18px; font-size: 10px; }
+.ww-line-head strong { font-size: 10.5px; color: #6d5749; font-weight: 700; }
+
+/* ---- 底部：输入与点选 ---- */
+
+.ww-bottom.column { flex-direction: column; align-items: stretch; gap: 7px; }
+.ww-composer-row { display: flex; gap: 8px; }
+.ww-vote-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.ww-hint { font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+/* ---------------- 赛后复盘（牌摊开之后的桌边群聊） ---------------- */
+
+/* 对话框里的 @ 候选：贴在这一条底栏的上沿往上弹，不占版面高度 */
+.ww-mention-list {
+    display: none;
+    position: absolute;
+    left: 13px;
+    right: 13px;
+    bottom: calc(100% - 10px);
+    max-height: 170px;
+    overflow-y: auto;
+    padding: 5px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .97);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 26px rgba(92, 68, 50, .16);
+    z-index: 6;
+}
+
+.ww-mention-list.open { display: block; }
+
+.ww-at-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    padding: 8px 10px;
+    font-size: 11.5px;
+    font-family: inherit;
+    color: #6d5749;
+    cursor: pointer;
+}
+
+.ww-at-item:hover { background: rgba(241, 223, 208, .7); }
+
+/* 合并同类：主视角自己的那条靠右，别人的靠左 */
+.ww-review {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 4px;
+}
+
+.ww-review-title {
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin: 14px 0 10px;
+}
+
+.ww-rv-line {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    max-width: 86%;
+    margin-bottom: 8px;
+}
+
+.ww-rv-line.mine { align-self: flex-end; align-items: flex-end; }
+
+.ww-rv-head {
+    font-size: 9.5px;
+    color: var(--muted);
+    margin: 0 4px 3px;
+}
+
+.ww-rv-bubble {
+    padding: 8px 11px;
+    border-radius: 14px 14px 14px 4px;
+    background: rgba(255, 255, 255, .78);
+    border: 1px solid rgba(255, 255, 255, .8);
+    font-size: 11.5px;
+    line-height: 1.62;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ww-rv-line.mine .ww-rv-bubble {
+    border-radius: 14px 14px 4px 14px;
+    background: rgba(228, 236, 224, .9);
+}
+
+/* 点名的那个名字：看得出来这是在叫谁 */
+.ww-rv-at { color: #96583c; font-weight: 700; }
+
+/* 「正在想…」「听到了，待会儿说」：虚线气泡，一眼看得出还没落地 */
+.ww-rv-line.thinking .ww-rv-bubble {
+    background: transparent;
+    border: 1px dashed rgba(167, 93, 61, .38);
+    color: var(--muted);
+    font-size: 10.5px;
+}
+
+/* 赛后心得那两张卡（心得 / 记忆）：两样去处不同，所以分开摆、各自标一句它去哪了 */
+.ww-insight {
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: rgba(255, 255, 255, .72);
+    padding: 10px 11px;
+    margin-bottom: 9px;
+}
+
+.ww-insight-label {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 5px;
+}
+
+.ww-insight-text {
+    font-size: 12px;
+    line-height: 1.68;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* 自动接话开着的时候，开关自己要看得出来是开着的 */
+.ww-bottom button.on { background: rgba(167, 93, 61, .16); color: #96583c; }

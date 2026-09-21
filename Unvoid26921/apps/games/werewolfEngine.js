@@ -879,10 +879,8 @@ export function startGame(session, { rng = Math.random, claims = [] } = {}) {
     session.sheriffPk = null;     // 竞选平票开的那一台（同上）
     session.pendingDeaths = null; // 算定还没落的死讯（上一局没公布完的不能跟过来）
     session.pk = null;           // 平票开的那一台（上一局没走完的 PK 不能跟着这一局走）
-    // 上一局的调用账与降级状态：同一张桌再开一局，不能在开局就带着「连续失败已转模板」
-    // （那会让新的一局一句 AI 都不打），调用计数也该从 0 重新数
+    // 上一局的调用计数：同一张桌再开一局要从 0 重新数（预算是它算的）
     session.callCount = 0;
-    session.ai = null;
     session.pending = null;
     session.winner = null;
     session.night = {};

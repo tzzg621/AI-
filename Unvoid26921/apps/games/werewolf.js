@@ -1897,9 +1897,11 @@ function renderTable(app) {
     // 否则那些格子刚从「按不动」变成「按得动」，谁也不会去试
     const canReplay = (session.seats || []).some(s => canInsight(app, session, s));
     const how = canMark ? '点座位贴标记' : (canReplay ? '点座位让他复盘这一局' : '');
+    // 「模板模式」照 modeOf 算，不照某个开关：没配 key / 超出预算**本来**就是每句话都在走模板，
+    // 标出来才对得上。以前读的是 `session.ai.template`（那个开关 2026-09-21 去掉了，见 modeOf）。
     const note = [
         `存活 ${engine.aliveSeats(session).length} 人`,
-        session.ai?.template ? '模板模式' : ''
+        ai.modeOf(session) === 'template' ? '模板模式' : ''
     ].filter(Boolean).join(' · ');
 
     return `
@@ -1924,6 +1926,9 @@ function renderTableBottom(app) {
     const mine = mySeatOf(app, session);
 
     if (isOver(session)) return renderReviewComposer(app, session, mine);
+    // 没等到 AI 回话的那一拍：底栏整个交给那两颗按钮（重试 / 用模板顶上，见 runTurn）。
+    // 排在最前面——这一步还没落库，这会儿别的动作都不该点得动
+    if (app.pendingStep && app.pendingStep.sid === session.id) return renderStalled(app);
     // 半自动跑着的时候不盖底栏：它替别人拿主意与我那一份无关，我那一份得照样点得动
     if (app.busy && !app.autoRun) {
         return `<footer class="ww-bottom"><button class="primary" disabled>⏳ 等 AI 回话…</button></footer>`;
@@ -2342,11 +2347,15 @@ function renderNightAct(app, session, mine, kind) {
  * ① 记下 roundId，回来时局面已经往前走过就把这次结果丢掉（照 textAdventure 的比对思路）
  * ② 真的打出去了才计调用数、记成败；模板模式下这些函数根本不会发请求
  * ③ 调用点自己决定怎么把结果落到状态上（apply）
+ * ④ **没等到回话就不落模板**：这一步原样挂在 `app.pendingStep` 上，底栏摆两颗按钮让玩家选
+ *    「重新问一次」还是「用模板顶上」（2026-09-21 用户口径：「在失败默认返回模板台词之前，
+ *    加一个手动选择是否重试的选项」）。见 renderStalled。
  *
- * `strict` 只给半自动问票用：**没等到 AI 回话就整笔不落**。别的调用点照旧走模板兜底——
- * 那边「宁可先有一步」比「空一拍」强（结算、发言都卡不起）；投票不行，它那一档的兜底是
- * `res?.vote ?? null`，等于把一次失败静默记成一票弃票，事后谁也认不出来。不落的这一票
- * 留在名单里，底栏那个「继续投票」就是重试入口。
+ * 半自动那一档（`strict`）照旧：它本来就不落库，失败的那位留在名单里、底栏那颗
+ * 「继续投票 / 继续表态」就是重试——两条路是同一个路子，不必再摆一次选择。
+ *
+ * `pendingStep` 只在内存里（跟 app.draft 一个性质），**离开这个模块就没了**——不需要清理，
+ * 也不需要守卫：失败那一次什么都没落库，局面本来就没往前动，回来还是那一拍。
  */
 async function runTurn(app, close, { call, apply, strict = false }) {
     const session = app.session;
@@ -2361,30 +2370,72 @@ async function runTurn(app, close, { call, apply, strict = false }) {
     try { res = await call(session); } catch { res = null; }
     app.busy = false;
 
+    // `!res` 也要算「没等到回话」：`call` 抛出来时上面那个 catch 把 res 收成了 null，
+    // 只查 `degraded` 的话它会漏到下一行、被 apply 记成一票弃票——正是这一档要防的那件事
+    const failed = willCall && !strict && (!res || res.degraded);
+
     const out = await mutateSession(app, sid, s => {
         if ((s.roundId || 0) !== roundId) return { dropped: true };
-        // 调用照样记账（它真打出去了、也真失败了），只是**不落地**
-        if (willCall) {
-            s.callCount = (s.callCount || 0) + 1;
-            ai.afterCall(s, { ok: !res?.degraded });
-        }
-        // `!res` 也要算「没等到回话」：`call` 抛出来时上面那个 catch 把 res 收成了 null，
-        // 只查 `degraded` 的话它会漏到下一行、被 apply 记成一票弃票——正是这一档要防的那件事
+        // 调用照样计数（它真打出去了，成败都算一次），只是失败那一下**不落地**
+        if (willCall) s.callCount = (s.callCount || 0) + 1;
+        if (failed) return { dropped: false, stalled: true };
         if (strict && (!res || res.degraded)) return { dropped: false, skipped: true };
         return { dropped: false, done: !!apply(s, res) };
     });
 
+    // 停住这一拍：这一步原样留着，等玩家在底栏选（`res` 也留着——选「用模板顶上」要用它）
+    if (out?.stalled) app.pendingStep = { sid, roundId, call, apply, res };
+
     renderApp(app, close);
     if (out?.dropped) toast(app, '局面已经往前走了，这次结果作废');
-    // strict 那一路不在这儿报：半自动跑完一轮会统一说一句「N 位没等到回话」，
-    // 一句顶一句地弹两个 toast 只会互相盖掉
-    else if (out?.skipped) { /* 见上：留给循环收尾时报 */ }
-    else if (res?.degraded && !app.session?.ai?.template) toast(app, '这次没等到 AI 回应，先用模板顶上');
+    // 下面这两路都不在这儿报：停住那一路由底栏两颗按钮自己说（见 renderStalled），
+    // 半自动那一路留给循环收尾时统一报——一句顶一句地弹两个 toast 只会互相盖掉
+    else if (out?.stalled || out?.skipped) { /* 见上 */ }
     else if (out && out.done === false) toast(app, '这一步没生效，再点一次试试');
-    // 这一拍是不是把局面送进了投票阶段（四个说话落点的尾巴），或者手动点了一位让他表态
-    // （那一下也走这一支：半自动开着就把剩下的接着问完）——见 maybeAutoRun
-    maybeAutoRun(app, close);
+    // 停住 / 跳过的那两拍**不能**再往下推：局面没往前动，尾巴上这个自动推进会踩着它往下跑一整轮
+    if (!out?.stalled && !out?.skipped) maybeAutoRun(app, close);
     return { res, ...out };
+}
+
+/**
+ * 停住的那一拍：局面一步没动，这一步原样留在 `app.pendingStep` 里。
+ * 两颗按钮——**重试**（把同一次调用再打一遍）/ **用模板顶上**（走原来那条降级路）。
+ *
+ * 不用弹窗：弹窗关掉就找不回来了，而这一档的全部意义就是「找得回来」。
+ * `res` 为 null 时（`call` 整个抛出来）没有模板可落，那只给重试。
+ */
+function renderStalled(app) {
+    return `
+        <footer class="ww-bottom column ww-stalled">
+            <div class="ww-stalled-tip">这一步没等到 AI 回话，局面没有动。</div>
+            <div class="ww-stalled-row">
+                <button id="wwRetryBtn" class="primary">🔄 重新问一次</button>
+                ${app.pendingStep?.res ? '<button id="wwFallbackBtn">用模板顶上</button>' : ''}
+            </div>
+        </footer>
+    `;
+}
+
+/** 重试：把同一次调用原样再打一遍。再失败就再停一次（runTurn 会把 pendingStep 重新挂上） */
+function retryStalled(app, close) {
+    const step = app.pendingStep;
+    if (!step || app.busy) return;
+    app.pendingStep = null;
+    return runTurn(app, close, { call: step.call, apply: step.apply });
+}
+
+/** 用模板顶上：把那次没等到的结果当成结果落下去——就是这次改动之前的老行为 */
+async function fallbackStalled(app, close) {
+    const step = app.pendingStep;
+    if (!step || app.busy) return;
+    app.pendingStep = null;
+    const out = await mutateSession(app, step.sid, s =>
+        ((s.roundId || 0) !== step.roundId ? { dropped: true } : { dropped: false, done: !!step.apply(s, step.res) }));
+    renderApp(app, close);
+    if (out?.dropped) toast(app, '局面已经往前走了，这次结果作废');
+    else if (out && out.done === false) toast(app, '这一步没生效，再点一次试试');
+    else toast(app, '先用模板顶上了');
+    maybeAutoRun(app, close);
 }
 
 /**
@@ -2455,7 +2506,12 @@ function declareTurn(app, close, seatNo, type, strict = false) {
  * 天亮还要参加竞选，遗言得等到公布死讯、拿着竞选之后的局面自己说。所以那条捷径在那张板子上
  * 自然失效——`ready` 是空串，照走下面那次调用（白天补枪那条路不受这道闸管，照常有草稿）。
  *
- * AI 没回话就用模板台词顶上：遗言这一拍**不能卡住**，卡住的不是一个人，是整局。
+ * 没等到 AI 回话时这一拍会停住（见 renderStalled）：选「用模板顶上」才落到 `ai.fallbackSpeech`。
+ * 以前是不问就落模板，2026-09-21 改成先问一声。
+ *
+ * **待查**：这里原来写的是「遗言这一拍不能卡住，卡住的不是一个人，是整局」。那是写这段代码
+ * 的人留的判断，不是定论——正常拿到回复时流程不卡，那么失败之后重试成功也不该卡（只多一条
+ * 失败记录）。**要是哪儿非用模板顶上不可、不然就推不动，那大概是那个地方出了问题。**
  * 死人不再改表：这一段只写正文，不合并判断、不记笔记、不动关注表。
  */
 function lastWordsTurn(app, close, seatNo, type) {
@@ -2839,7 +2895,6 @@ async function ghostSpeak(app, close) {
         engine.addNote(s, mine.seat, { kind: 'ghost', text: res?.note });
         if (!willCall) return true;
         s.callCount = (s.callCount || 0) + 1;
-        ai.afterCall(s, { ok: !res?.degraded });
         return true;
     });
     renderApp(app, close);
@@ -3044,7 +3099,9 @@ function orderTurn(app, close) {
 /**
  * 交警徽：一次调用定去向（活人 / 撕掉）。**有草稿的时候轮不到它**——遗言那一次调用已经
  * 顺手定好了，`badge_wait` 那一拍只是当众走一遍（见 badgeWalkThrough）。
- * 他是在任警长、而且已经出局了，所以这一拍不能卡住：AI 没回话就用模板兜底（座号最小的活人）。
+ * 他是在任警长、而且已经出局了。这里原来写着「这一拍不能卡住」，同上——当**待查的优化点**看
+ * （见 lastWordsTurn 那段），不是约束。没等到回话就停住等玩家选，选「用模板顶上」才落到
+ * `ai.templateBadgeTarget`（座号最小的活人）。
  */
 function badgeTurn(app, close) {
     return runTurn(app, close, {
@@ -3566,6 +3623,9 @@ function bindApp(app, close) {
     // 继续（投票 / 表态）：半自动开着但循环没在跑（被打断了 / 刚回到这张桌），
     // 点一下把同一段接着跑——同一颗按钮，两个落点都走 maybeAutoRun
     root.querySelector('#wwAutoMore')?.addEventListener('click', () => maybeAutoRun(app, close));
+    // 没等到 AI 回话那一拍的两颗按钮（见 renderStalled）：这一步还没落库，别的动作都点不动
+    root.querySelector('#wwRetryBtn')?.addEventListener('click', () => retryStalled(app, close));
+    root.querySelector('#wwFallbackBtn')?.addEventListener('click', () => fallbackStalled(app, close));
 
     // 活动页那件商品：卡片整张就是按钮（data-item 认是哪一件），价钱与余额的账在 buyShopItem 里算
     root.querySelectorAll('.ww-shop-card').forEach(btn => {

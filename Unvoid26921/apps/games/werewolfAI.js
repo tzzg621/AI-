@@ -8,7 +8,8 @@
 // - **用哪条 API 预设**：只扮演**一个**角色的那一拍，用那个角色在名册里绑的预设
 //   （presetOfSeat / presetOfChar，绑定表在 apps/roleData.js 的 ai_char_presets）；多人同场
 //   （狼队 ≥2 只、一次匹配一批候选人）不传 ⇒ 走默认。绑的那条不在了就让 aiService 报错，**不回退**。
-// - 降级状态（连续失败、要不要转模板）挂在 session.ai 上，由 modeOf/afterCall 读写。
+// - **这里不管「打了几次失败」**：失败之后怎么办是玩家的事（`werewolf.js` 的 `runTurn` 会停住
+//   问「重新问一次 / 用模板顶上」）。这一层只判断「这一次该不该真发请求」——见 modeOf。
 
 import { callAIWithMessages, hasApiKey } from '../aiService.js';
 import { getCharPresetId } from '../roleData.js';
@@ -435,9 +436,8 @@ export function parseMatchReply(raw) {
  * 主视角对狼队友说的话也只有一个出口：wolfPackAction 的 player（**一次性入参**，不落 session、不进 events）。
  */
 
-/* ---- 调用模式（三级降级） ---- */
+/* ---- 调用模式 ---- */
 
-export const FAIL_LIMIT = 3;      // 连续失败到这个数，整局转模板模式
 // 一局最多打多少次对局内调用。**暂时不封顶**（2026-09-13 用户定：预算这件事先放一放）。
 // 机制与读侧都还在，想收回来就把上面这个 Infinity 换成一个数字——
 // 也可以由板子下发（BOARDS[x].callBudget → session.callBudget，12 人局参考值 150）。
@@ -453,27 +453,18 @@ export function budgetOf(session) {
 
 /**
  * 这次调用该不该真打出去。
- * ① 没配 key ② 已经连续失败到 FAIL_LIMIT ③ 超过调用预算 → 'template'
+ * ① 没配 key ② 超过调用预算 → 'template'
+ *
+ * **不再有「连续失败 N 次整局转模板」那一档**（原 `FAIL_LIMIT = 3` / `afterCall`，2026-09-21 去掉）。
+ * 用户口径：失败该由玩家一拍一拍自己选（`werewolf.js` 的 `runTurn` 会停住问你「重新问一次 /
+ * 用模板顶上」），一个不可逆、又不分失败原因（500 秒回 vs 超时 2 分钟）的保险丝**比它要防的
+ * 「卡住」更糟**——网络抖三下就把整局钉死在模板上，改对 key 也回不来。
+ * 那根真正管「等待」的杠杆是 `DEFAULT_TIMEOUT`，与模式无关，要动单说。
  */
 export function modeOf(session) {
     if (!hasKey()) return 'template';
-    if (session?.ai?.template) return 'template';
     if ((session?.callCount || 0) >= budgetOf(session)) return 'template';
     return 'ai';
-}
-
-/**
- * 记一次调用的结果，返回此后该用的模式。
- * 单次失败只是这一次走模板；连续失败到 FAIL_LIMIT 就整局转模板——
- * 与其让玩家一直等超时，不如先把这局点完。转了就转不回来（这一局）。
- */
-export function afterCall(session, { ok = true } = {}) {
-    if (!session) return 'ai';
-    const state = session.ai = session.ai || { fails: 0, template: false };
-    if (ok) { state.fails = 0; return state.template ? 'template' : 'ai'; }
-    state.fails += 1;
-    if (state.fails >= FAIL_LIMIT) state.template = true;
-    return state.template ? 'template' : 'ai';
 }
 
 /* ---- 私有笔记（每个 AI 决策的副产物） ----
@@ -633,6 +624,10 @@ function viewBlock(session, seatNo, record = null) {
     const labelLine = labelLineOf(session, seatNo);
     // 笔记只读**它自己**那一份：狼队批量调用时，每只狼的块里只有它自己写过的东西
     const myNotes = (session.aiNotes || {})[seatNo] || [];
+    // 狼队频道只给**狼**：那是全队夜里一起说的话，好人的视角里根本没有这个频道
+    const wolfChat = view.faction === 'wolf'
+        ? (session.events || []).filter(e => e.type === 'wolfchat')
+        : [];
     // 手册：只装**它自己**点亮的条目（路人固定拿通用基础那一档，见 werewolfCodex）
     const codexText = codexBlock(record, { isGuest: seat.kind === 'npc', roomScope: session.typeId });
     const order = speakOrderBlock(session, seatNo);
@@ -698,6 +693,14 @@ function viewBlock(session, seatNo, record = null) {
         // 「之前」写在抬头里：这一块是**此前记下的一笔账**，不是这一轮定下的结论——
         // 谁在它眼里变了就写新的盖掉，写 `取消` 就能把这个人划掉（用户 2026-09-14）
         labelLine ? `\n【你之前对场上这些人的判断】（你此前一轮轮记下来的，随时可以改）\n${labelLine}` : '',
+        // 狼队频道：夜间那次调用产出的**公共**那一半（chat）。它一直在 events 里，但此前对局中
+        // 一个 AI 读者都没有（全项目只有复盘的 reviewViewBlock 读它）——**2026-09-21 补上读侧**。
+        // 与下面那份私有笔记是一对：说出口的全队都听得见，心里那句只有自己知道。
+        // 整局都回灌、不截，理由与笔记同（见 addNote 的注释）。
+        // 题面那边**不动**：「各自独立判断、不必互相迁就」照旧——每只狼的判断归它自己那份笔记。
+        wolfChat.length
+            ? `\n【你们狼队夜里说过的话】（只有你们自己看得到）\n${wolfChat.map(c => `- 第 ${c.round} 夜 ${c.text}`).join('\n')}`
+            : '',
         myNotes.length
             ? `\n【你自己之前记的笔记】\n${myNotes.map(n => `- ${noteHead(n)}：${n.text}`).join('\n')}`
             : ''

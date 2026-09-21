@@ -1134,6 +1134,11 @@ p.ww-entry-cond { color: var(--muted); font-size: 11px; }
 
 .ww-hint { font-size: 10px; color: var(--muted); line-height: 1.5; }
 
+/* 没等到 AI 回话的那一拍（见 renderStalled）：底栏整个换成那两颗按钮。
+   排布沿用 `.ww-bottom.column`，这里只管那行字——换了个颜色，别的一字不动。 */
+.ww-stalled-tip { font-size: 10px; color: #96583c; line-height: 1.5; }
+.ww-stalled-row { display: flex; gap: 8px; }
+
 /* ---------------- 赛后复盘（牌摊开之后的桌边群聊） ---------------- */
 
 /* 对话框里的 @ 候选：贴在这一条底栏的上沿往上弹，不占版面高度 */

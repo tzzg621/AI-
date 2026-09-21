@@ -1,0 +1,362 @@
+/* apps/roleBook.css — 角色名册：新建角色表单
+   约束（见 AI/03-主题与样式约定.md）：
+   - 六主题只改外壳变量，--panel/--text/--muted/--line 恒不变，内页永远浅色
+   - 类名 kebab-case 带前缀，本文件统一 rb-（cc- 已被 simCity.css 占用）
+   - color-mix 一律带十六进制回退双写，变量一律带 fallback（照 apps/worldBook.css 的质量写）
+*/
+
+/* ==================== 局部变量 ==================== */
+.rb-page {
+    /* 模块主色，同 roleBook.js 的 export const color */
+    --rb-accent: #e91e63;
+    --rb-accent-soft: rgba(233, 30, 99, 0.12);
+    --rb-ai: var(--accent, #0b93f6);
+    --rb-ai-soft: rgba(11, 147, 246, 0.07);
+    --rb-ai-line: rgba(11, 147, 246, 0.3);
+    --rb-ai-ring: rgba(11, 147, 246, 0.18);
+
+    --rb-ink: var(--text, #222);
+    --rb-sub: var(--muted, #888);
+    --rb-hair: var(--line, #ddd);
+    --rb-card: var(--panel-strong, #fff);
+    --rb-fill: #f8f8fa;
+
+    --rb-radius-card: 16px;
+    --rb-radius-ctl: 10px;
+    --rb-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-bottom: 24px;
+}
+
+/* ==================== 页头（标题绝对居中 + 右侧动作钮） ==================== */
+.rb-header {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: 52px;
+    box-sizing: border-box;
+}
+
+.rb-header > .screen-title {
+    position: absolute;
+    left: 0;
+    right: 0;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* ==================== 分区与卡片 ==================== */
+.rb-sec {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.rb-sec__title {
+    padding-left: 2px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--rb-sub);
+}
+
+.rb-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    background: var(--rb-card);
+    border-radius: var(--rb-radius-card);
+    box-shadow: var(--rb-shadow);
+}
+
+/* ==================== 字段 ==================== */
+.rb-field {
+    display: block;
+}
+
+.rb-field > span {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--rb-sub);
+}
+
+.rb-req {
+    font-style: normal;
+    color: var(--rb-accent);
+}
+
+.rb-field input,
+.rb-field textarea,
+.rb-field select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 11px;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--rb-ink);
+    background: var(--rb-fill);
+    border: 1px solid var(--rb-hair);
+    border-radius: var(--rb-radius-ctl);
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.rb-field textarea {
+    min-height: 44px;
+    resize: vertical;
+}
+
+.rb-field input::placeholder,
+.rb-field textarea::placeholder {
+    color: #b0b0b8;
+}
+
+.rb-field input:focus,
+.rb-field textarea:focus,
+.rb-field select:focus {
+    background: var(--rb-card);
+    border-color: var(--rb-accent);
+    box-shadow: 0 0 0 3px var(--rb-accent-soft);
+}
+
+/* 双列行（性别 ‖ 年龄） */
+.rb-row {
+    display: flex;
+    gap: 10px;
+}
+
+.rb-row > .rb-field {
+    flex: 1;
+    min-width: 0;
+}
+
+/* ==================== AI 区块 ==================== */
+.rb-ai {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 14px;
+    background: var(--rb-ai-soft);
+    border: 1px dashed var(--rb-ai-line);
+    border-radius: var(--rb-radius-card);
+}
+
+.rb-ai__title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--rb-ai);
+}
+
+.rb-ai__hint {
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--rb-sub);
+}
+
+.rb-ai textarea {
+    background: var(--rb-card);
+    border-color: var(--rb-ai-line);
+}
+
+.rb-ai textarea:focus {
+    border-color: var(--rb-ai);
+    box-shadow: 0 0 0 3px var(--rb-ai-ring);
+}
+
+/* ==================== 「或 自己填」分隔线 ==================== */
+.rb-or {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--rb-sub);
+}
+
+.rb-or::before,
+.rb-or::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--rb-hair);
+}
+
+/* ==================== 按钮 ==================== */
+.rb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 16px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--rb-ink);
+    background: var(--rb-card);
+    border: 1px solid var(--rb-hair);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.14s ease, opacity 0.14s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.rb-btn:active {
+    transform: scale(0.97);
+}
+
+.rb-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.rb-btn:disabled:active {
+    transform: none;
+}
+
+.rb-btn:focus-visible {
+    outline: 2px solid var(--rb-accent);
+    outline-offset: 2px;
+}
+
+.rb-btn--primary {
+    color: #fff;
+    background: var(--rb-accent);
+    border-color: transparent;
+    box-shadow: 0 3px 10px rgba(233, 30, 99, 0.22);
+}
+
+.rb-btn--ai {
+    width: 100%;
+    color: #fff;
+    background: var(--rb-ai);
+    border-color: transparent;
+    box-shadow: 0 3px 10px rgba(11, 147, 246, 0.22);
+}
+
+/* 表尾整宽主按钮
+   ★ 别挪回页头右上角：全局 📋 任务悬浮球（AITaskManager.js 的 #aiTaskFloatingBtn，
+     position:fixed + z-index:9999，默认就落在手机右上角）会整个盖住它，点不动。
+     悬浮球还能被拖到手机屏内任意位置，靠挪位置避让不成立，所以主操作放表单末尾。 */
+.rb-btn--block {
+    width: 100%;
+    padding: 13px;
+    font-size: 14px;
+    border-radius: 14px;
+}
+
+/* ==================== 折叠区（公开信息分层） ==================== */
+.rb-fold {
+    background: var(--rb-card);
+    border-radius: var(--rb-radius-card);
+    box-shadow: var(--rb-shadow);
+    overflow: hidden;
+}
+
+.rb-fold > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 13px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--rb-ink);
+    cursor: pointer;
+    list-style: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.rb-fold > summary::-webkit-details-marker {
+    display: none;
+}
+
+.rb-fold > summary::after {
+    content: "›";
+    margin-left: auto;
+    font-size: 17px;
+    line-height: 1;
+    color: var(--rb-sub);
+    transition: transform 0.2s ease;
+}
+
+.rb-fold[open] > summary::after {
+    transform: rotate(90deg);
+}
+
+.rb-fold[open] > summary {
+    border-bottom: 1px solid var(--rb-hair);
+}
+
+.rb-fold__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+}
+
+/* 分层小标题（L0 表象层 / L1 熟人层 …） */
+.rb-lv {
+    color: var(--rb-accent) !important;
+}
+
+/* ==================== 勾选行 ==================== */
+.rb-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 14px;
+    background: var(--rb-card);
+    border-radius: var(--rb-radius-card);
+    box-shadow: var(--rb-shadow);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.rb-check input[type="checkbox"] {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--rb-accent);
+    cursor: pointer;
+}
+
+.rb-check > span {
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--rb-ink);
+}
+
+/* ==================== 提示与状态 ==================== */
+.rb-hint {
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--rb-sub);
+}
+
+.rb-status {
+    min-height: 18px;
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: center;
+    color: var(--rb-sub);
+}
+
+.rb-status.is-error {
+    color: #c62828;
+}
+
+/* ==================== 窄屏：双列压回单列 ==================== */
+@media (max-width: 340px) {
+    .rb-row {
+        flex-direction: column;
+        gap: 12px;
+    }
+}

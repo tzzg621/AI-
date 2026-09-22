@@ -533,6 +533,10 @@ async function aiContinue(pairKey, branchId, context) {
     }
 
     const { callAIWithMessages } = await import('../aiService.js');
+    // 任务中心：这一轮续写要能在 📋 里看见、完成/失败有通知。
+    // 用 watch 不用 submit —— 用户正盯着「⏳ 生成中...」等这一次，进队列只会白等（与 apps/chat/shakeMatch.js 同）。
+    // 动态 import：任务中心模块顶层就 new 出来，构造里直接建 📋 悬浮球 DOM，静态引会顺带把它实例化。
+    const { taskManager } = await import('../../store/AITaskManager.js');
 
     // ★ 优先使用 if 线专属预设，空则默认
     const presetId = getCurrentPresetId();
@@ -574,14 +578,17 @@ ${storyText || '（剧情刚开始）'}
 - 不要总结、不要评价，直接输出剧情内容
 - 不要输出标题或"续写："等前缀`;
 
-    const result = await callAIWithMessages({
-        systemPrompt,
-        userContent: '请继续。',
-        maxTokens: 8000,
-        temperature: 0.9,
-        presetId
+    const result = await taskManager.watch('ifbranch', `if线续写 · ${branch.name}`, async () => {
+        const raw = await callAIWithMessages({
+            systemPrompt,
+            userContent: '请继续。',
+            maxTokens: 8000,
+            temperature: 0.9,
+            presetId
+        });
+        return raw.trim();
     });
-    return result.trim();
+    return result;
 }
 
 // ★ 构建角色背景注入

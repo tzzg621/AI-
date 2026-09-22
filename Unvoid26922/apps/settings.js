@@ -254,35 +254,26 @@ export function bindEvents(container) {
     });
 
 
-    // ★ 异步计算并显示存储量
+    // ★ 异步计算并显示存储量（总量走浏览器口径；分模块明细在「数据存储」子页里算）
     (async function updateStorageSummary() {
         const summaryEl = document.getElementById('storageSummary');
         if (!summaryEl) return;
 
-        let lsSize = 0;
-        let lsCount = 0;
-        let imgCount = 0;
+        const parts = [];
 
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && !key.startsWith('img_')) {
-                const val = localStorage.getItem(key);
-                lsSize += val ? val.length : 0;
-                lsCount++;
-            }
-        }
+        try {
+            const { usage } = await navigator.storage.estimate();
+            parts.push(usage >= 1024 * 1024
+                ? '已用 ' + (usage / 1024 / 1024).toFixed(1) + ' MB'
+                : '已用 ' + (usage / 1024).toFixed(0) + ' KB');
+        } catch {}
 
         try {
             const { dbKeys } = await import('../store/ImageCache.js');
-            const keys = await dbKeys();
-            imgCount = keys.length;
+            parts.push((await dbKeys()).length + ' 张图片');
         } catch {}
 
-        const sizeStr = lsSize > 1024 * 1024
-            ? (lsSize / 1024 / 1024).toFixed(1) + 'MB'
-            : (lsSize / 1024).toFixed(0) + 'KB';
-
-        summaryEl.textContent = `${lsCount} 项文字 · ${imgCount} 张图片 · ${sizeStr}`;
+        summaryEl.textContent = parts.join(' · ') || '本浏览器不支持统计';
     })();
 
 

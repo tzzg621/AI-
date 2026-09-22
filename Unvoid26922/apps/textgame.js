@@ -1096,7 +1096,7 @@ function isFree() {
  * 口径：正文一律保留在原处、不剥离——面板照旧是正文的一部分，只是换了画法
  * （普通模式剥的是标签这种格式记号，不是正文本身）。
  * 别写成 <pre><code>：`.tg-turn-body code` 会给它套上灰底和小内边距，面板对齐会散。
- * 切分逻辑留在零 import 的 textgameCore.js（A 段要在 Node 里直跑），这里只管画。
+ * 切分逻辑在零 import 的 textgameCore.js，这里只管画。
  */
 function bodyHtml(aiText) {
     const free = isFree();

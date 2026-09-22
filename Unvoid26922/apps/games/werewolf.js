@@ -872,7 +872,7 @@ function renderHandbook(app) {
     /** 组一节：标题是组名，`<span>` 位放组说明（.ww-section-title span 就是给这种小字准备的） */
     const groupSection = group => {
         const entries = codex.groupEntries(group.key);
-        if (!entries.length) return '';   // 空组不摆空标题（数据侧另有断言钉「没有空组」）
+        if (!entries.length) return '';   // 空组不摆空标题
         return `
             <div class="ww-section-title"><strong>${esc(group.name)}</strong><span class="ww-group-desc">${esc(group.desc)}</span></div>
             ${entries.map(e => renderEntry(e, record)).join('')}
@@ -2235,7 +2235,7 @@ function renderNightAct(app, session, mine, kind) {
         ? '你翻牌了，警徽不能留在没有票的人手里：点一个人当众交给他，或者当场撕掉。'
         : '你出局了，警徽得有个去处：点一个人当众交给他，或者当场撕掉。'}定了就收不回。</div>
                 <div class="ww-vote-row">
-                    ${targets.map(t => chip(t, nameOf(t), false)).join('')}
+                    ${targets.map(t => chip(t.seat, nameOf(t.seat), false)).join('')}
                     ${chip(0, '撕掉警徽', false)}
                 </div>
                 ${renderDelegate('badge')}

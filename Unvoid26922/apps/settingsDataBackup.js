@@ -26,7 +26,7 @@ const FALLBACK_DB_NAMES = [
     'DataSyncDB', 'imageStore', 'AoiMemory', 'CreatorChatHistory',
     'worldDictionaryDB', 'cardStore', 'lingxiDB', 'teaHouseDB', 'SketchDB',
     'simCityDB', 'gameCenterDB', 'shakeDB', 'OnlineBookCity', 'desktop_interaction',
-    'werewolfDB'
+    'werewolfDB', 'textgameDB', 'miniGamesDB', 'diaryDB', 'divinationDB'
 ];
 
 /* ================================================================ */
@@ -311,6 +311,190 @@ function statsOf(backup) {
 }
 
 /* ================================================================ */
+/*  数据占用统计（本页顶部那块）                                          */
+/* ================================================================ */
+
+// 三种口径：
+//   总量    navigator.storage.estimate() —— 浏览器给的准确值（整个站点：IDB + 缓存 + 离线文件）
+//   分项    逐库游标读记录、累加长度 —— 只能是估算（不含 IDB 内部开销与压缩），故一律标「约」
+//   条数    IDBObjectStore.count() —— 不读记录内容，跟库多大无关
+
+// 行 → 库。没列到的库自动进「其它库」。行序 = 算完之前的展示序，算完按体积降序重排。
+const STAT_ROWS = [
+    { label: '狼人杀', dbs: ['werewolfDB'], unit: '条' },
+    { label: '文游', dbs: ['textgameDB'], unit: '条' },
+    { label: '组件', dbs: ['miniGamesDB'], unit: '条' },
+    { label: '角色与对话', dbs: ['DataSyncDB', 'shakeDB'], unit: '条' },
+    { label: '图片', dbs: [IMAGE_DB], unit: '张' },
+    { label: '文字配置', ls: true, unit: '项' },
+    { label: '其它库', other: true, unit: '条' }
+];
+
+const idbReq = req => new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+});
+
+// 一份值占多少字节。二进制按 byteLength/size，字符串按 UTF-16（×2）；
+// 不能 JSON.stringify —— ArrayBuffer/Blob 会被序列化成空对象，量出 0。
+function measureValue(v) {
+    if (v === null || v === undefined) return 0;
+    const t = typeof v;
+    if (t === 'string') return v.length * 2;
+    if (t === 'number' || t === 'boolean') return 8;
+    if (t === 'bigint') return 16;
+    if (v instanceof ArrayBuffer) return v.byteLength;
+    if (ArrayBuffer.isView(v)) return v.byteLength;   // TypedArray / DataView
+    if (v instanceof Blob) return v.size;             // File 走这支
+    if (v instanceof Date) return 8;
+    if (Array.isArray(v)) {
+        let n = 0;
+        for (const x of v) n += measureValue(x);
+        return n;
+    }
+    if (t === 'object') {
+        let n = 0;
+        for (const k of Object.keys(v)) n += k.length * 2 + measureValue(v[k]);
+        return n;
+    }
+    return 0;
+}
+
+// 单库：条数 + 估算字节数（IDB 存不进循环引用，故不设环检测）
+async function measureDB(name) {
+    const db = await openDBByName(name);   // 不传版本：只读现有库，不会触发建库/升级
+    db.onversionchange = () => db.close(); // 别的标签页要升级时立刻让路
+    try {
+        let count = 0;
+        let bytes = 0;
+        for (const sname of [...db.objectStoreNames]) {
+            const store = db.transaction(sname, 'readonly').objectStore(sname);
+            count += await idbReq(store.count());
+            bytes += await new Promise((resolve, reject) => {
+                let n = 0;
+                const req = store.openCursor();   // 取一条量一条，不攒数组
+                req.onsuccess = () => {
+                    const cur = req.result;
+                    if (!cur) { resolve(n); return; }
+                    n += measureValue(cur.key) + measureValue(cur.value);
+                    cur.continue();
+                };
+                req.onerror = () => reject(req.error);
+            });
+        }
+        return { count, bytes };
+    } finally {
+        db.close();
+    }
+}
+
+// localStorage：非 img_ 键进「文字配置」，历史 img_ 键（dataURL）并入「图片」行
+function localStorageStats() {
+    let lsCount = 0, lsBytes = 0, imgCount = 0, imgBytes = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        const val = localStorage.getItem(key) || '';
+        const n = (key.length + val.length) * 2;
+        if (key.startsWith('img_')) { imgCount++; imgBytes += n; }
+        else { lsCount++; lsBytes += n; }
+    }
+    return { lsCount, lsBytes, imgCount, imgBytes };
+}
+
+async function estimateUsage() {
+    try {
+        if (!navigator.storage || !navigator.storage.estimate) return null;
+        const { usage, quota } = await navigator.storage.estimate();
+        return { usage: usage || 0, quota: quota || 0 };
+    } catch { return null; }
+}
+
+function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+function occupancyHTML(rows, est, final) {
+    const list = final ? [...rows].sort((a, b) => b.bytes - a.bytes) : rows;
+
+    const head = est
+        ? `<div style="display:flex; justify-content:space-between; font-size:13px;">
+               <span style="color:#333; font-weight:600;">本机已用</span>
+               <span style="color:#666; font-weight:600;">${fmtBytes(est.usage)}${est.quota ? ' · 可用约 ' + fmtBytes(est.quota) : ''}</span>
+           </div>
+           <div style="display:flex; justify-content:space-between; font-size:12px; color:#999; padding-bottom:8px;">
+               <span>分项合计</span><span>约 ${fmtBytes(rows.reduce((n, r) => n + r.bytes, 0))}</span>
+           </div>`
+        : '';
+
+    const lines = list.map(r => {
+        let right;
+        if (r.total > 0 && r.done === 0) right = '统计中…';
+        else if (r.failed && r.failed === r.total) right = '读不到';
+        else {
+            right = `${r.count} ${r.unit} · ${r.bytes ? '约 ' + fmtBytes(r.bytes) : '0 B'}`;
+            if (r.done < r.total) right += ' …';
+            if (r.failed) right += ` · ${r.failed} 库读不到`;
+        }
+        return `<div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:9px 0; border-bottom:1px solid #f0f0f0; font-size:13px;">
+                    <span style="color:#333;">${r.label}</span>
+                    <span style="color:#999; text-align:right;">${right}</span>
+                </div>`;
+    }).join('');
+
+    const note = est
+        ? `<div style="font-size:11px; color:#bbb; margin-top:8px;">「本机已用」是浏览器口径（含缓存与离线文件，刚写入的数据可能还没算进去）；各行为数据量估算，不含数据库自身开销。两者不会正好相等。</div>`
+        : '';
+    return head + lines + note;
+}
+
+// 填 #storageStatsBody：总量先出，再逐库算、边算边刷
+async function fillOccupancy(body) {
+    const rows = STAT_ROWS.map(r => ({ ...r, count: 0, bytes: 0, total: 0, done: 0, failed: 0 }));
+    const other = rows.find(r => r.other);
+
+    let est = await estimateUsage();
+    const ls = localStorageStats();
+    const lsRow = rows.find(r => r.ls);
+    lsRow.count = ls.lsCount;
+    lsRow.bytes = ls.lsBytes;
+    lsRow.total = lsRow.done = 1;
+    const imgRow = rows.find(r => (r.dbs || []).includes(IMAGE_DB));
+    if (imgRow) { imgRow.count += ls.imgCount; imgRow.bytes += ls.imgBytes; }
+
+    const paint = final => { body.innerHTML = occupancyHTML(rows, est, final); };
+    paint(false);
+
+    let names = [];
+    try { names = await collectAllDBNames(); } catch (e) { console.warn('[数据占用] 枚举库失败:', e); }
+
+    const targets = names.map(name => ({ name, row: rows.find(r => (r.dbs || []).includes(name)) || other }));
+    for (const t of targets) t.row.total++;
+    paint(false);
+
+    for (const { name, row } of targets) {
+        try {
+            const { count, bytes } = await measureDB(name);
+            row.count += count;
+            row.bytes += bytes;
+        } catch (e) {
+            console.warn('[数据占用] 读不到，跳过:', name, e);
+            row.failed++;
+        }
+        row.done++;
+        paint(false);
+    }
+
+    // 刚写入的数据浏览器不一定已经记进 usage，收尾再读一次
+    const again = await estimateUsage();
+    if (again) est = again;
+    paint(true);
+}
+
+/* ================================================================ */
 /*  导入（v2：清库重写 + 缺库重建）                                        */
 /* ================================================================ */
 
@@ -579,6 +763,11 @@ export function renderDataBackup() {
                 <div class="header-spacer"></div>
             </div>
             <div class="screen-content">
+                <div class="page-card" style="margin-bottom:16px;">
+                    <div style="font-weight:600; font-size:15px; margin-bottom:6px;">📊 数据占用</div>
+                    <div id="storageStatsBody" style="font-size:13px; color:#999;">统计中…</div>
+                </div>
+
                 <div class="page-card">
                     <div style="font-size:14px; color:#666; margin-bottom:16px;">
                         导出为 JSON 文件（覆盖全部功能独立数据），或导入备份文件恢复。
@@ -690,4 +879,16 @@ export function bindDataBackupEvents(container, onBack) {
 
         fileInput.value = '';  // 允许重复选择同一文件
     });
+
+    // ★ 异步统计「数据占用」：不阻塞导出/导入，失败也只影响这一块
+    (async function () {
+        const body = container.querySelector('#storageStatsBody');
+        if (!body) return;
+        try {
+            await fillOccupancy(body);
+        } catch (e) {
+            console.warn('[数据占用] 统计失败:', e);
+            body.textContent = '统计失败，重进本页可再试。';
+        }
+    })();
 }

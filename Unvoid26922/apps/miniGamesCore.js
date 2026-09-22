@@ -1,7 +1,6 @@
 // apps/miniGamesCore.js — 互动组件的纯逻辑层
 //
-// 零 import：沙箱文档组装 / 上报值防脏 / 文本格式化。不碰 DOM、存储、网络，
-// 所以能在 Node 里直接跑（见 tests/e2e-minigames.js 的 A 段）。
+// 零 import：沙箱文档组装 / 上报值防脏 / 文本格式化。不碰 DOM、存储、网络。
 //
 // 沙箱的立场（实测过，不是推理）：
 //   · iframe 只给 `sandbox="allow-scripts"`，**不给 allow-same-origin** ⇒ 不透明源，

@@ -1,7 +1,7 @@
 // apps/games/werewolfCodex.js — 狼人杀知识手册（条目库）+ 角色「狼人杀点数」的档位表
 //
 // 纯数据 + 纯函数：不碰 DOM、不读存储、无 I/O（只 import 同样是纯常量的 werewolfRooms
-// 取身份/房型的中文名），所以 Node 里也 import 得到 ⇒ E2E 的 A 段直接测这一整套。
+// 取身份/房型的中文名）。
 //
 // 本文件是**条目正文的唯一本体**（照 apps/divinationContent.js 的定位）。三条规矩：
 // ① id 永不改义、只增不改、删不复用——手册的「已点亮」按 id 存，改义等于篡改历史。
@@ -203,10 +203,23 @@ export const ENTRIES = [
         // 2026-09-21 补后半句：原文「只有出局结果和票型骗不了人」容易被读成
         // 「出局结果能当身份证据」——一局实测里好人正是拿「他昨天出局了」去佐证预言家，
         // 而这张板子放逐不翻牌。补的是这两样**说的是什么**，不是它们不可信。
-        text: '你只知道自己的身份、自己夜里看到的东西、和场上公开发生过的事。别人说的话都不算证据，只有出局结果和票型骗不了人——不过这两样说的是「发生了什么」：出局的人是什么牌、投票的人对不对，都还得自己判。',
+        text: '你只知道自己的身份、自己夜里看到的东西、和场上公开发生过的事。别人说的话都不算证据，只有出局结果和票型骗不了人。',
         // 用户 2026-09-14：遗言报了身份 ≠ 身份坐实。**不写 need**——只由悟性深度管：
         // 一点就透的人自己就该想到，迟钝的人看不进来。
-        deep: [{ text: '有人临死前报出的身份也一样——遗言还是一句他说的话，狼的遗言里同样会报一个身份。' }]
+        //
+        // 遗言整块走条件（2026-09-22）：外层用**房型**——会开遗言的只有两张 12 人板，而速战/
+        // 扮演同样是暗牌也照样不设遗言，所以拿明暗当「这桌有没有遗言」的判据会漏。里面再按
+        // 明暗与阵营细分。明牌那一格今天不成立（两张 12 人板都是暗牌），留给以后有明牌的遗言桌：
+        // 那种桌出现时，把它的房型词加进外层这个条件就活——这条是 common scope，本来就送得到。
+        deep: [{
+            text: '—不过这两样说的是客观发生的事，无法由此推出他们的确切身份，他们的发言与投票的动机是什么，都还得自己判断。'
+                + '{{(standard12|sheriff12)包括遗言，遗言也可以是一种迷惑他人的手段。'
+                + '{{(open)虽然明牌局出局会亮出身份，但'
+                + '{{(wolf)狼人依旧可以通过遗言来迷惑场上好人对活着的人的身份判断，以此来隐藏剩下的队友。}}'
+                + '{{(good)好人依旧可以帮助在场的人隐藏身份信息，并且迷惑狼人认错场上的神职或村民。}}'
+                + '}}'
+                + '}}'
+        }]
     },
     {
         id: 'common_win', group: 'rule', scope: ['rookie', 'blitz', 'story'], tier: 'basic', cond: 'always',
@@ -258,7 +271,7 @@ export const ENTRIES = [
     {
         id: 'common_claim', group: 'skill', scope: 'common', tier: 'principle', cond: 'played:5',
         title: '跳身份的时机',
-        text: '被怀疑，即将被抗推出局，可以选择跳身份来试图避免出局。'
+        text: '被怀疑，即将被抗推出局的时候，可以选择跳身份来试图避免出局。跳身份之前，请深思熟虑，权衡利弊，跳身份后会造成什么影响，以及你为什么需要跳身份。'
     },
     {
         id: 'common_silent', group: 'skill', scope: 'common', tier: 'meta', cond: 'played:8',
@@ -425,10 +438,9 @@ export const ENTRIES = [
      * （概念绕不开时直接用词，跟一句白话解释）。
      *
      * ⚠️ **三条通用条目的正文里不许出现「警长 / 警徽 / 举手 / 1.5 票」**——
-     * 它们会进 6 人局的提示词，而 6 人局不设警长（测试有金丝雀钉着）。
+     * 它们会进 6 人局的提示词，而 6 人局不设警长。
      * 提到警徽的只能是 scope:'sheriff12' 的条目，这正是「对跳」与「警徽流」**必须拆成两条**
      * 的原因：合一条就得整体锁死在警长局，而 6 人局同样有对跳。
-     * 静态扫描见 tests/e2e-werewolf.js 那条「条目库静态扫」。
      * 四条一律 tier:'principle'，声明在末尾 ⇒ 既有条目的相对注入顺序一字不动。 */
     {
         // 2026-09-21：这条原为 `principle` + `played:4`，只教「怎么比两条验人线」，没说对跳是常态。
@@ -480,7 +492,7 @@ export const ENTRIES = [
      * 战绩是**生涯**口径、跨局累计。
      *
      * ⚠️ 五条都是 `scope:'common'`，正文+标题里不许出现「警长 / 警徽 / 举手 / 1.5 票」——
-     * 悍跳因此写「占**预言家**的位置」而不是「抢警徽」（静态扫在 tests/e2e-werewolf.js）。
+     * 悍跳因此写「占**预言家**的位置」而不是「抢警徽」。
      * 声明在末尾 ⇒ 既有条目的相对注入顺序一字不动；代价见变更日志（新手/入门档够不着这五条）。 */
     {
         id: 'common_wolfstand', group: 'wolfplay', scope: 'common', tier: 'principle', cond: 'role:werewolf:2',
@@ -676,8 +688,7 @@ export const ENTRIES = [
  * 好人阵营的组顺序照 werewolfRooms.js 的 ROLE_META 身份次序（预 → 女 → 守 → 猎 → 白）。
  * 照 werewolfRooms.js 的 ROOM_TYPES 写：一张表 + 查找器，**声明顺序即显示顺序**（不依赖 key 顺序）。
  * 组自带 `desc`（渲染进手册页组头的 .ww-section-title 的 <span> 位）。
- * ⚠️ 组名与组说明也会印在手册页每一节上 ⇒ **同样不许出现「警长 / 警徽 / 举手 / 1.5 票」**
- * （测试里那条静态扫必须覆盖这两张表——它原先只扫条目正文，是个洞）。
+ * ⚠️ 组名与组说明也会印在手册页每一节上 ⇒ **同样不许出现「警长 / 警徽 / 举手 / 1.5 票」**。
  *
  * 阵营**不写在条目上**，由条目的 `group` 反查——单一数据源，别重复存。
  */
@@ -885,15 +896,88 @@ function flairNeedLabel(i) {
     return (t || FLAIR_TIERS[FLAIR_TIERS.length - 1]).label;
 }
 
+/* ---------------- 句子里的条件片段（2026-09-22） ----------------
+ * `{{(条件)文字}}`：条件成立就留下这段文字，不成立就整段丢掉。可以写在**任何**正文节点上
+ * （底子、`deep` 的层、`byFlair` 的变体），也可以互相嵌套——**嵌套就是「且」，`|` 是「或」**：
+ *   '…只有出局结果和票型骗不了人{{(open){{(wolf)不过这桌明牌，你一出局身份就当场公开}}}}。'
+ *
+ * 条件词认四格，都拿 ctx 的四格比：
+ *   房型 id —— `ROOM_TYPES` 那五个（rookie/blitz/story/standard12/sheriff12）。`common` **不是**房型，
+ *     写它不成立；
+ *   `open` `hidden` —— `revealModeOf` 的取值；
+ *   `wolf` `good` —— `factionOf` 的取值。分组轴上的 `both` 不在这里，写它不成立；
+ *   悟性四档 —— `FLAIR_TIERS` 的键。**认不出悟性的人按兜底 `steady` 算**，所以 `{{(steady)…}}`
+ *     对没测评过的人也成立，不是「恰好是一般的人」。
+ * **认不出的词永远不成立**（与 litBy 同一口径）：打错一个字只少讲半句，不凭空多讲、也不报错。
+ *
+ * 与「条目进不进得来」是两关，互不影响（用户 2026-09-22：「就单纯是各管各的筛选」）：
+ * 那一关在 litIds（scope + cond）决定整条在不在，这一关只改正文。片段里写了这一桌用不到的
+ * 房型也无所谓——它只是永远不成立，不报错也不警告，以后那一关放宽了它自己就活。
+ */
+const FRAG_OPEN = '{{';
+const FRAG_CLOSE = '}}';
+
+/** 从 `at`（指向 `{{`）读一个片段。凑不齐（没有 `(`、没有配对的 `}}`）返回 null，那几个字符原样留着 */
+function readFrag(s, at) {
+    if (s[at + 2] !== '(') return null;
+    const close = s.indexOf(')', at + 3);
+    if (close < 0) return null;
+    let depth = 1;
+    let i = close + 1;
+    while (i < s.length) {
+        if (s.startsWith(FRAG_OPEN, i)) { depth++; i += 2; continue; }
+        if (s.startsWith(FRAG_CLOSE, i)) {
+            depth--;
+            if (!depth) return { cond: s.slice(at + 3, close).trim(), body: s.slice(close + 1, i), end: i + 2 };
+            i += 2; continue;
+        }
+        i++;
+    }
+    return null;
+}
+
+/** 按 `keep(条件)` 的判定重组一句话；留下的片段里再往里走一层（嵌套） */
+function fragWalk(text, keep) {
+    const s = String(text || '');
+    if (!s.includes(FRAG_OPEN)) return s;
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+        const at = s.indexOf(FRAG_OPEN, i);
+        if (at < 0) { out += s.slice(i); break; }
+        out += s.slice(i, at);
+        const f = readFrag(s, at);
+        if (!f) { out += FRAG_OPEN; i = at + 2; continue; }
+        if (keep(f.cond)) out += fragWalk(f.body, keep);
+        i = f.end;
+    }
+    return out;
+}
+
+/** 条件成不成立：`|` 分开的词命中任意一个就算成立；认不出的词谁都不等，于是永远不成立 */
+function fragOn(cond, ctx) {
+    if (!ctx) return false;
+    return String(cond).split('|').some(w => {
+        const word = w.trim();
+        return !!word && (word === ctx.room || word === ctx.reveal || word === ctx.camp || word === ctx.flair);
+    });
+}
+
+/** 这一句在这一局的上下文里讲成什么样。不传 ctx ⇒ 只留不带条件的部分 */
+export function resolveFrag(text, ctx = null) {
+    return fragWalk(text, cond => fragOn(cond, ctx));
+}
+
 /**
  * 这一块正文此刻长什么样：默认正文 + 按悟性**依次**生效的 `byFlair`。
  * 变体是**累积**的：`steady` 换了说法、`quick` 又补一截，通透的人两句都见着；
  * 只应用不超过本人悟性的那些，写错的键只丢它自己。条目底子与每一层共用这一个出口。
+ * **条件片段在变体合成之后解析**——所以 `byFlair` 的变体里也能写片段。
  */
-export function nodeText(node, record) {
+export function nodeText(node, record, ctx = null) {
     let text = String(node?.text || '');
     const vary = node?.byFlair;
-    if (!vary || typeof vary !== 'object') return text;
+    if (!vary || typeof vary !== 'object') return resolveFrag(text, ctx);
     const mine = flairRankOf(record);
     Object.keys(vary)
         .map(k => [flairRank(k), k])
@@ -904,18 +988,19 @@ export function nodeText(node, record) {
             if (typeof v === 'string') text = v;                         // 换掉这一层的说法
             else if (v && typeof v.more === 'string') text += v.more;    // 在这一层后面再接一截
         });
-    return text;
+    return resolveFrag(text, ctx);
 }
 
 /**
- * 这一条此刻的完整正文：底子 + 够得着的那些层，顺序接起来。
- * **注入与手册页共用这一个出口**——手册上看到的，就是模型拿到的。
+ * 这一条此刻的完整正文：底子 + 够得着的那些层，顺序接起来，最后按 ctx 解析条件片段。
+ * **注入与手册页共用这一个出口**：注入侧传了 ctx（这一局哪张房型、什么明暗、这一座在哪个阵营），
+ * 手册页不传——所以手册上看到的是**两种上下文都成立**的那一份，带条件的半句不在上面。
  */
-export function entryTextOf(entry, record) {
+export function entryTextOf(entry, record, ctx = null) {
     if (!entry) return '';
-    let text = nodeText(entry, record);
+    let text = nodeText(entry, record, ctx);
     entryDeep(entry).forEach((layer, i) => {
-        if (layerOpen(layer, i, record)) text += nodeText(layer, record);
+        if (layerOpen(layer, i, record)) text += nodeText(layer, record, ctx);
     });
     return text;
 }
@@ -951,20 +1036,34 @@ export const CODEX_MAX_CHARS = 7000;
 export const CODEX_HEAD = '【你对狼人杀的理解】';
 
 /**
- * 这个座位此刻能拿出手的狼人杀知识 = **点亮 ∩ 这一桌**，再按字符预算装。
+ * 这个座位此刻能拿出手的狼人杀知识 = **点亮 ∩ 这一桌**，其中每条的正文再按一定条件过一遍
+ * （对不上的那一段整段丢掉）。**整条都被丢完的就不进块**——块里的条数因此可能少于
+ * 「点亮 ∩ 这一桌」：少的那条不是没点亮，是它的正文被条件全丢了。
  * 没得说就返回空串（**不产生空标题**）。
+ * 额度是另一回事：装不下的条目**整条跳过**，不截半句。
+ * 条件是什么、今天认哪些词：见上面「句子里的条件片段」那一段。
  *
  * 两条口径别混（用户 2026-09-17 定）：**点亮**是「这个角色解锁了什么」（角色级、持久，
  * 手册那一页显示的就是它，不过房型），**注入**是「这一局他用得上什么」（本局级）。
  * 两者**允许不等**，差额来自**筛选**（用户原话：目前只由房型产生，后续可能还会有其他条件）。
  * 这个函数自己**不再筛**：`maxChars` 只是装不下的兜底（超长整条跳过），不是一道取舍。
+ *
+ * **两关各拿各的那一格**（2026-09-22）：
+ *   第一关 `roomScope` 只喂 `litIds`——决定**整条**进不进得来，它收不到 `ctx`；
+ *   第二关 `ctx` 只喂正文里的条件片段——决定**半句**在不在，它看不到条目。
+ * 颗粒度就是判据：整条讲不讲给这张桌 ⇒ 写 `scope`；一句话里只有半句跟这一桌有关 ⇒ 写片段。
+ * 房型在两边都出现（片段里也能写 `{{(rookie)…}}`），因为这两关问的不是同一件事。
  * @param {object} record 这个座位自己的档案（名册读 stats，路人读 npcs；可以是 null）
- * @param {{isGuest?:boolean, roomScope?:string, maxChars?:number}} opts
+ * @param {{isGuest?:boolean, roomScope?:string, ctx?:object, maxChars?:number}} opts
+ *   `ctx` = 这一局的桌面：`{ room, reveal, camp }`，调用点装配（悟性由 `record` 现提，见下）。
+ *   不传 ⇒ 条件片段一律不成立，正文只留不带条件的部分（手册页就是这么读的）。
  */
-export function codexBlock(record, { isGuest = false, roomScope = null, maxChars = CODEX_MAX_CHARS } = {}) {
+export function codexBlock(record, { isGuest = false, roomScope = null, ctx = null, maxChars = CODEX_MAX_CHARS } = {}) {
     const tierKey = isGuest ? GUEST_TIER : (tierByKey(record?.level)?.key || null);
     const tier = tierByKey(tierKey);
-    const ids = new Set(litIds(record, { isGuest, roomScope }));
+    const ids = new Set(litIds(record, { isGuest, roomScope }));   // 第一关：房型 + 经历，跟 ctx 无关
+    // 第二关的那一格：悟性跟分层门槛同一个来源（都是这个 record），其余三格调用点说了算
+    const fragCtx = ctx ? { ...ctx, flair: flairByKey(record?.flair)?.key || DEFAULT_WATCH_FLAIR } : null;
 
     const lines = [];
     if (tier) lines.push(`你的水平：${tier.label}——${tier.line}`);
@@ -973,7 +1072,8 @@ export function codexBlock(record, { isGuest = false, roomScope = null, maxChars
         .sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);   // 稳定排序：同级保持声明顺序
     let used = 0;
     for (const e of picked) {
-        const text = entryTextOf(e, record);        // 分级可见：底子 + 他够得着的层（手册页同源）
+        const text = entryTextOf(e, record, fragCtx);  // 底子 + 够得着的层 + 这一局成立的那些半句
+        if (!text) continue;                           // 半句都不剩就别占一行（跟「不产生空标题」同一件事）
         if (used + text.length > maxChars) continue;   // 超长**整条跳过**，不截断半句
         lines.push(`· ${text}`);
         used += text.length;

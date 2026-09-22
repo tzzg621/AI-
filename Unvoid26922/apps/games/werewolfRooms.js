@@ -1,5 +1,5 @@
 // apps/games/werewolfRooms.js — 狼人杀：板子、房间、角色与文案常量
-// 纯常量 + 纯函数，无 DOM / 无存储 / 无 AI，供 werewolf.js 与 E2E 直接引用。
+// 纯常量 + 纯函数，无 DOM / 无存储 / 无 AI，供 werewolf.js 直接引用。
 
 /* ---------------- 角色 ---------------- */
 
@@ -335,8 +335,7 @@ export function tableRulesBlock(session, allTemplates = []) {
  * 作者的自定义块摆在风格护栏**之前**：那句「不要复述规则」管的是他该怎么说话，
  * 紧跟在自己这块后面会被读成「别念下面这些」。什么都没勾没写时整块不出现。
  *
- * 注意这里是**纯函数**：模板数组由调用方传进来（`allTemplates`），本文件因此
- * 零 import、能被 E2E 逐字复制成 .mjs 直接断言（`tests/e2e-werewolf.js` 的 A 段）。
+ * 注意这里是**纯函数**：模板数组由调用方传进来（`allTemplates`），本文件因此零 import。
  */
 export function roleHeadText(session, allTemplates = []) {
     const board = getBoard(session?.boardId);

@@ -215,7 +215,7 @@ export function aliveCountOf(session, faction) {
 /**
  * 发言次序：起点与方向每个天亮现掷（见 rollSpeakPlan），掷出来钉在 `session.speakPlan` 上。
  * 次序 = 活人座号从起点起**按这一轮的方向**挨个往下数、绕过座位表末尾接回开头（出局的人本就不在名单里）。
- * 没掷过（老 session、测试里手搓的局面）就是座号从小到大——今天之前的行为。
+ * 没掷过（老 session、还没掷过的局面）就是座号从小到大——今天之前的行为。
  */
 function rotateFrom(list, start, dir) {
     const walk = dir === -1 ? [...list].reverse() : list;
@@ -253,7 +253,7 @@ export function currentSpeaker(session) {
 
 /**
  * 掷这一天的发言次序。返回值一律**放在 session.speakPlan 上**（`{side, dir, anchor, start}`）。
- * rng 从参数进来（跟 shuffle/startGame 一个规矩），测试里喂一串定值就能把每种组合都走一遍。
+ * rng 从参数进来（跟 shuffle/startGame 一个规矩）——喂一串定值就能把每种组合都走一遍。
  * 抽取次序与上面那条口径一致：有死者是 2 个（锚 → 左/右），平安夜是 3 个（左/右 → 方向 → 起点，
  * 与从前逐字同序）。平安夜那一支的 `side` 没有意义（措辞不读它，与从前一样），
  * 留着只为让 speakPlan 的形状统一。
@@ -707,8 +707,8 @@ function watchedAt(entries, n) {
  * （写出来就是从这个人的名字上把标签拿掉，不是留一个空格）。
  *
  * 认（`parseMarks`）/ 落库（`mergeLabels`）/ 读侧归一（`labelsOf`）/ 提示词那一行
- * （`labelLineOf`）**四件都在这里**——放引擎只有一个理由：A 段 `--engine` 跑得到
- * （`werewolfAI.js` 的依赖链读 localStorage，Node 里 import 不进来）。
+ * （`labelLineOf`）**四件都在这里**——它们服务的是 `session.aiLabels` 这一个引擎概念，
+ * 写它的是引擎（`mergeLabels`），读它的是提示词那一行与界面，都只是消费者。
  */
 
 /** `狼`/`民` 这类简写归一到词表里的写法；「撤掉」的两种写法（文本那行与 JSON 那条路） */
@@ -1099,7 +1099,7 @@ export function applyWolfKill(session, targetSeat) {
 
 /**
  * 狼队各提各的，合成一个：**多数说了算**；没人过半（含两只狼提得不一样）时只在并列最多的那几个里摇号。
- * 一致时【不摇号】——调用方和测试都靠这一点区分「商量好了」与「摇出来的」。
+ * 一致时【不摇号】——调用方靠这一点区分「商量好了」与「摇出来的」。
  * 并列时先按座号升序再摇：不然「谁先提」会悄悄决定结果，同一份提名换个顺序就换个人死。
  * 全弃权返回 null。rng 从参数进来，跟 shuffle/startGame 一个规矩。
  */
@@ -1114,7 +1114,7 @@ function pickWolfTarget(targets = [], rng = Math.random) {
 }
 
 /**
- * 两只狼的刀口合并（`pickWolfTarget` 的两票版，单独导出给测试与老调用点用）。
+ * 两只狼的刀口合并（`pickWolfTarget` 的两票版）。
  * 四种情形与从前逐字等价：一边只提一个就用那个、提得一样就用那个、不一样才摇号、都没提就是弃权。
  */
 export function resolveWolfKill(mineTarget, mateTarget, rng = Math.random) {

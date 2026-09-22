@@ -228,7 +228,7 @@ export function coinsOf(record) {
 
 /**
  * 扣钻的**纯算术**：够就返回扣完的余额，不够返回 null。
- * 与落库分开是为了让 A 段能不开浏览器地验这一层（同 accumulate 的理由）。
+ * 算账与写账分开：调用方先问「够不够、剩多少」，写不写由落库那一步定（见 `spendCoins`）。
  */
 export function spendFrom(record, n = HEART_COST) {
     const cost = Math.max(0, Math.floor(Number(n) || 0));
@@ -283,7 +283,7 @@ export function itemsOf(record) {
     return out;
 }
 
-/** 收进 n 件的**纯算术**：返回新的背包（与落库分开，A 段能不开浏览器地验这一层，同 spendFrom） */
+/** 收进 n 件的**纯算术**：返回新的背包（算账与写账分开，同 `spendFrom`） */
 export function addItemsOf(record, itemId, n = 1) {
     const add = Math.max(0, Math.floor(Number(n) || 0));
     const bag = itemsOf(record);

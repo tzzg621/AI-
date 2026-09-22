@@ -17,7 +17,7 @@ import { taskManager } from '../../store/AITaskManager.js';
 import { CharacterStore } from '../../store/CharacterStore.js';
 import { getVisibleProfile } from '../../store/profileAccess.js';
 import { getCharacterRecordById, getCharacterNameById } from '../characterManager.js';
-import { boardProse, roleLabel, markTagsOf, roleHeadText } from './werewolfRooms.js';
+import { boardProse, roleLabel, markTagsOf, roleHeadText, factionOf, revealModeOf } from './werewolfRooms.js';
 import { getStat, getNpc, cachedRuleTemplates } from './werewolfStore.js';
 import { codexBlock, parseTier, parseFlair, watchPlan, TIERS, FLAIR_TIERS } from './werewolfCodex.js';
 import {
@@ -603,6 +603,19 @@ function insightBlock(record) {
 /* ---- 视角块 ---- */
 
 /**
+ * 条件片段要的那一格（交给 `codexBlock` 的 `ctx`）：这一桌是哪个房型、明牌还是暗牌、这一座在哪边。
+ * 悟性不在这里——它由 `codexBlock` 从同一份 record 现提（跟分层门槛同源）。
+ * 跟第一关那把钥匙（`roomScope`）分开拿着：那把决定**整条**进不进来，这把只改正文里的半句。
+ */
+function codexCtx(session, seat) {
+    return {
+        room: session.typeId,
+        reveal: revealModeOf(session),
+        camp: factionOf(seat.role)
+    };
+}
+
+/**
  * 这个座位此刻知道的事：自己（身份/阵营/同伴/验人记录）+ 公开场上信息 +
  * 自己对在场者的私人认知 + **它自己**此前贴的判断 + 它自己的狼人杀档案。
  * 公开那一段各座位逐字一致（都是 publicFeed 出来的）。
@@ -629,7 +642,11 @@ function viewBlock(session, seatNo, record = null) {
         ? (session.events || []).filter(e => e.type === 'wolfchat')
         : [];
     // 手册：只装**它自己**点亮的条目（路人固定拿通用基础那一档，见 werewolfCodex）
-    const codexText = codexBlock(record, { isGuest: seat.kind === 'npc', roomScope: session.typeId });
+    const codexText = codexBlock(record, {
+        isGuest: seat.kind === 'npc',
+        roomScope: session.typeId,          // 第一关：整条讲不讲给这张桌
+        ctx: codexCtx(session, seat)        // 第二关：正文里哪半句成立
+    });
     const order = speakOrderBlock(session, seatNo);
 
     return [
@@ -714,7 +731,7 @@ function toneLine(type) {
 
 /**
  * 对局内 6 处调用共用的**唯一** system 头积木。
- * 正文与措辞纪律都在 `roleHeadText`（werewolfRooms.js，纯函数、零 import、A 段整段测得到）——
+ * 正文与措辞纪律都在 `roleHeadText`（werewolfRooms.js，纯函数、零 import）——
  * 要加东西加在那里，别在这个文件里拼字符串。这里只负责把模板库的同步缓存递进去。
  */
 function roleHead(session) {
@@ -836,7 +853,7 @@ export async function speakCharacter({ session, seatNo, type }) {
  * 别让「这轮没提」被当成「谁都不盯了」。
  *
  * 座号与名字的认法在引擎里（parseWatchTargets，与 @ 点名同一套），这里只管
- * 「这一桌上还有谁能盯」；导出是为了让 A 段能在不开网络的地方验这一层。
+ * 「这一桌上还有谁能盯」。
  */
 export function watchSeats(line, session, seatNo, cap = Infinity) {
     if (!line) return undefined;
@@ -909,8 +926,8 @@ export async function lastWords({ session, seatNo, type }) {
     const userContent = [
         '你已经出局了，现在轮到你留遗言——这是你这一局最后一段公开的话。',
         toneLine(type),
-        '想说什么都行：亮出你的身份、报出你夜里的验人或用药、点名你认定的狼、',
-        `给活着的人留一句话。不用再藏着掖着了（不超过 ${limit} 字）。`,
+        '想说什么都行：包括不限于报一个身份、点出你心目中的投票对象、分析场上局势、表达遗憾或者表演情绪。',
+        `正常来说，主要目的是为了自己的阵营能够获得最终的胜利，所以表达遗言前请想清楚为什么这么说，以及这么说可能会造成什么影响。（不超过 ${limit} 字）。`,
         badge
             ? `你还是这一局的警长，顺带把警徽的去向定下来：交给一个还有票的人（${legal.join('、')} 号），或者当场撕掉。`
                 + '写完遗言之后另起一行写你的决定，格式必须完全一致：【警徽】5号　或者　【警徽】撕掉'
@@ -1832,7 +1849,11 @@ function reviewViewBlock(session, seatNo, record = null) {
         .map(s => ({ id: s.characterId, name: s.name }));
     const knowledge = seat.kind === 'npc' ? '' : buildKnowledge(seat.characterId, others);
     const myNotes = (session.aiNotes || {})[seatNo] || [];
-    const codexText = codexBlock(record, { isGuest: seat.kind === 'npc', roomScope: session.typeId });
+    const codexText = codexBlock(record, {
+        isGuest: seat.kind === 'npc',
+        roomScope: session.typeId,          // 第一关：整条讲不讲给这张桌
+        ctx: codexCtx(session, seat)        // 第二关：正文里哪半句成立
+    });
     const isWolf = seat.role === 'werewolf';
     const rows = finalResult(session);
     const truth = nightTruth(session);

@@ -158,9 +158,6 @@ class DeskPet {
             this._lastFrameTime = performance.now();
         });
 
-        // 监听 AI 完成
-        window.addEventListener('ai-task-completed', () => this._onAIComplete());
-
         // 呼吸动画
         this._startBreathingCanvas(canvas);
         this._canvas = canvas;
@@ -259,9 +256,6 @@ class DeskPet {
 
         // 点击互动
         svg.addEventListener('click', () => this._onClick());
-
-        // 监听 AI 完成
-        window.addEventListener('ai-task-completed', () => this._onAIComplete());
     }
 
     _makeBlush(ns, cx, cy) {
@@ -446,7 +440,15 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
     document.addEventListener('DOMContentLoaded', initDeskPet);
 }
 
+// ---- 全局钩子（模块作用域，各只绑一次）----
+// ★ `ai-task-completed` 挂在这里而不是 _initCanvasMode / _initSvgMode 里：
+//   那两个方法每次 `desk-rendered` → `reinit()` 都会重跑一遍，挂在里面就会
+//   一次渲染攒一个监听（匿名函数，还取不下来）——回首页 N 次就攒 N 个，
+//   接下来每个 AI 任务完成都会把 `_onAIComplete()` 触发 N 遍。
+//   监听的生命周期是这个模块的，不是某一轮 DOM 的；`_onAIComplete()` 自己在
+//   调用时才读 `this._canvas` / `this._svg`，所以绑一次就够、与模式无关。
 window.addEventListener('desk-rendered', initDeskPet);
+window.addEventListener('ai-task-completed', () => petInstance?._onAIComplete());
 
 export { initDeskPet };
 export const bootInit = true;

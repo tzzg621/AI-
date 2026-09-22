@@ -122,30 +122,44 @@
 
 /* ========== Aoi 浮动按钮 ========== */
 
+/* ★ 外观照池塘里那颗 Aoi（.aoi-fishing-body，styles.css）：蓝色渐变圆身、
+   半透明白边、内里一圈白光。两边同一个人，就该长一个样。 */
 .aoi-fab {
     position: absolute;
     bottom: 200px;
     right: 20px;
     width: 52px;
     height: 52px;
-    border-radius: 50%;
-    border: none;
-    background: #5b6abf;
+    box-sizing: border-box;
+    border-radius: 50% 50% 45% 45%;
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    background: linear-gradient(180deg, rgba(114, 214, 255, 0.98), rgba(67, 156, 214, 0.92));
     color: white;
-    font-size: 24px;
+    font-size: 22px;
     cursor: pointer;
-    box-shadow: 0 4px 14px rgba(91, 106, 191, 0.4);
+    box-shadow: inset 0 4px 10px rgba(255, 255, 255, 0.5), 0 12px 20px rgba(34, 103, 149, 0.2);
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
     z-index: 100;
     user-select: none;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* 内里的白光：池塘那颗的同款配方（inset 尺寸照抄，两者只差 2px） */
+.aoi-fab::before {
+    content: '';
+    position: absolute;
+    inset: 9px 14px 18px 14px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+    pointer-events: none;
 }
 
 .aoi-fab:hover {
     transform: scale(1.08);
-    box-shadow: 0 6px 20px rgba(91, 106, 191, 0.5);
+    box-shadow: inset 0 4px 10px rgba(255, 255, 255, 0.5), 0 14px 24px rgba(34, 103, 149, 0.32);
 }
 
 .aoi-fab:active {
@@ -707,13 +721,258 @@
 }
 
 /* ---- 房间内卡片 ---- */
+/* ★ 这两行是「设置浮层能盖住桌面场景」的**唯一支点**，与 .room-desk-scene 的 z-index:1 配对：
+   卡带 backdrop-filter ⇒ 它既是绝对定位后代的包含块（浮层 top:100% 正好挂在卡下沿），
+   又自成层叠上下文 ⇒ 浮层写多大 z-index 都只在卡内部排序、抬不出去，
+   所以必须把 z-index 提到卡这一层，让「卡 + 卡里的浮层」整体压过场景。
+   ⚠️ 别删这两行；⚠️ 也别给卡加 overflow:hidden（有人为修圆角会这么干）——浮层会被当场裁掉。 */
 .creator-room .page-card {
     background: rgba(255, 255, 255, 0.7);
     backdrop-filter: blur(4px);
     border-radius: 12px;
     margin: 0 16px;
+    position: relative;
+    z-index: 30;
 }
 
 .creator-room .aoi-fab {
     bottom: 160px;
+}
+
+/* ========== 设置浮层 ==========
+   房间把 aoi 的设置体当浮层用。**display 不碰** —— 显隐仍由 aoi-api.js 自己的 bind()
+   写 style.display 管着，这里只改盒模型，所以那个文件可以整个搬走、照常能用。
+
+   锚点＝那张设置卡（它有 backdrop-filter，天然是绝对定位后代的包含块），
+   top:100% 就是卡的下沿 —— 与狼人杀 .ww-board 挂 .ww-stage 是同一种关系。
+
+   ⚠️ #aoiApiBody 若在 aoi-api.js 里改名，这里会静默失效（**文件本身仍正常**，
+   只是退回「在流里展开」）。这是「Aoi 那侧保持可搬走」换来的，方向是有意的。 */
+.creator-room #aoiApiBody {
+    position: absolute;
+    /* 卡自己的下内边距是 16px，而 body 在流里正是从这个位置接上去的：
+       减掉这 16px，浮层的内容就落在原来那条线上 —— 展开时看不出它是浮层。
+       （.creator-padded 的 padding:16px，见上一条规则。） */
+    top: calc(100% - 16px);
+    left: 0;
+    right: 0;
+    z-index: 2;
+    /* ★ 全项目唯一一处 !important：压掉它内联的 padding:0 0 12px。
+       不压的话输入框会贴着浮层边缘。左右 32px 让字段与标题文字、那条分隔线对齐
+       （卡的 margin 16 + .creator-padded 16 + 标题行自己的 margin 16 = 48）；
+       下 28px = 它在流里自己的 12 + 原来那张卡给的 16，底边和改前一样宽裕。 */
+    padding: 0 32px 28px !important;
+    /* 上缘不留圆角、只圆下缘：接在卡下沿，看着就是那张卡长高了，而不是多出一块浮层 */
+    border-radius: 0 0 12px 12px;
+    /* 不描边、不投影、不做进场动画 —— 就为「和改前看着一样」。
+       底色是不透明的，但等于「卡的白 0.7 压在房间底色上」的合成色（差不到 1 个色阶），
+       所以既不透出下面的电脑，观感又与原来自带的白一致。 */
+    background: #fbfaf7;
+    /* 旋钮：内容约 286px，加内边距约 314px；浮层顶约在离房间顶 254px 处，
+       到房间底还剩约 400px。将来 .room-atmosphere 长高、或手机壳变矮，改这个数。 */
+    max-height: 360px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* Aoi 不在缔造者空间（在池塘）时，这扇 💠 门收起来 —— 它不在家，门口不该亮着灯。
+   用 visibility 收，不用 display：#aoiFab 的显示还会被聊天窗开关写内联 style.display，
+   而内联样式优先级高于类选择器，display 会被它顶回来。visibility 与它不相干。 */
+.creator-room.room-aoi-away .aoi-fab {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    /* visibility 的过渡是离散跳变：中间值一律按 visible 算 ——
+       所以加类时它随 opacity 一路淡出、到点才真隐藏；去类时立刻现形再淡入。 */
+    transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s, visibility 0.2s;
+}
+
+/* 浮球（z-index:100）会压住设置浮层右段的保存按钮、以及操作台右下角，
+   所以任一个浮层开着就让它淡出；关掉立刻回来，位置不用挪。 */
+.creator-room.room-aoi-float .aoi-fab,
+.creator-room.room-terminal-open .aoi-fab {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* ========== 桌面场景：桌子 + 电脑 ==========
+   房间自己的语言：柔、平、暖、低对比、圆角，只有很淡的 inset 高光和柔影，
+   **不上纹理、不描边**（对照 .room-window / .room-exit-btn）。
+   所以这里不搬书友会的木纹，也不搬池塘木牌的亮边浮雕。 */
+
+/* 贴房间底、整体抬起来一点。**别用「让 .room-main 变 flex:1 / position:relative」来达到这个效果**：
+   前者会让矮屏下桌子第一个被裁；后者会把 .aoi-fab 的包含块从 .creator-room
+   悄悄换成 .room-main（现在几何上碰巧重合，是隐式耦合）。绝对定位等价且零风险。 */
+.room-desk-scene {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 140px;   /* ★ 旋钮：把「平台 + 电脑」抬到房间中部（抬多少改这里） */
+    height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    z-index: 1;   /* 显式最低层：它就是布景。与 .creator-room .page-card 的 z-index:30 配对 */
+}
+
+/* ---- 平台：就一条暖色横板，不做腿、不做台沿 ----
+   一档 inset 高光吃顶光、一档柔影托住它，够读成「一块台子」了。 */
+.room-desk {
+    width: 84%;
+    height: 12px;
+    border-radius: 7px;
+    background: #dccab2;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 6px 16px rgba(150, 125, 100, 0.24);
+}
+
+/* ---- 电脑（可点，通往操作台）----
+   外壳照 .phone-wrapper/.phone-screen 的两层结构，内屏直接用 .room-window 的配方
+   —— 屋子里的窗和电脑屏本来就是一家人。 */
+.room-pc-wrap {
+    position: relative;    /* 操作台浮层的锚点 */
+    margin-bottom: -4px;   /* 让底座压进桌面：读成「放在桌上」而不是「浮在桌上方」 */
+}
+
+.room-pc {
+    position: relative;    /* 定位元素，画在无定位的桌子上方 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 10px 0;
+    border: 0;
+    background: none;
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.16s ease;
+}
+
+.room-pc-screen {
+    width: 128px;
+    height: 84px;
+    padding: 5px;
+    box-sizing: border-box;
+    border-radius: 12px;
+    background: #e4d6c1;   /* 暖白机壳（比房间底色深一档，否则糊在墙上） */
+    box-shadow: 0 6px 16px rgba(150, 125, 100, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    transition: box-shadow 0.2s ease;
+}
+
+.room-pc-screen::after {
+    content: '';
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    background: linear-gradient(165deg, #cfe2ee, #aecde0);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.07);
+}
+
+.room-pc-neck {
+    width: 11px;
+    height: 12px;
+    background: #d3c1aa;
+}
+
+.room-pc-base {
+    width: 50px;
+    height: 7px;
+    border-radius: 4px;
+    background: #cbb79b;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* 屏幕亮起来时用 Aoi 蓝（＝设置区标题、保存按钮那支 #5b6abf）作提示色 */
+.room-pc:hover .room-pc-screen,
+.room-pc:focus-visible .room-pc-screen {
+    box-shadow: 0 8px 20px rgba(91, 106, 191, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.room-pc:active {
+    transform: translateY(1px) scale(0.99);
+}
+
+/* ---- 操作台浮层（电脑点开的占位，内容以后往里加）----
+   **往上弹**：电脑在房间底部，往下会被 .creator-room 的 overflow:hidden 裁掉。 */
+.room-terminal {
+    display: none;
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%);
+    width: 268px;
+    z-index: 6;
+    border-radius: 14px;
+    background: #fffdf9;
+    box-shadow: 0 12px 26px rgba(150, 125, 100, 0.24);
+}
+
+/* 直接显示，不加进场动画 —— 它的居中靠 transform: translateX(-50%)，
+   而任何写 transform 的关键帧都会把这条居中顶掉（弹出时横向抖一下）。
+   ⚠️ 要给这里加动画，关键帧必须自己带上 translateX(-50%)。 */
+.room-terminal.open {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 朝下的小尖角，指着电脑 */
+.room-terminal::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    width: 12px;
+    height: 12px;
+    transform: translateX(-50%) rotate(45deg);
+    background: #fffdf9;
+}
+
+.room-terminal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 8px 16px;
+    border-bottom: 1px solid rgba(180, 160, 140, 0.22);
+}
+
+.room-terminal-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #6b5d4f;
+    letter-spacing: 0.5px;
+}
+
+.room-terminal-close {
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(180, 160, 140, 0.15);
+    color: #9a8b7a;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.room-terminal-close:hover {
+    background: rgba(180, 160, 140, 0.3);
+}
+
+/* 滚动必须放在内层：外层自己 overflow 会把它自己的 ::after 小尖角裁掉 */
+.room-terminal-body {
+    max-height: 250px;
+    overflow-y: auto;
+    padding: 12px 16px 14px;
+}
+
+.room-terminal-note {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #9a8b7a;
 }

@@ -45,7 +45,8 @@ class AITaskManager {
             id: 'task_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
             type, label,
             status: 'pending',
-            result: null, error: null,
+            // ★ 不记产物：任务只留「发生过什么」，正文/图片归各自的库（详见 _save）
+            error: null,
             createdAt: Date.now(),
             completedAt: null
         };
@@ -63,7 +64,6 @@ class AITaskManager {
                 try {
                     const result = await asyncFn();
                     task.status = 'completed';
-                    task.result = result;
                     task.completedAt = Date.now();
                     this._save();
                     this._notify(`✅ ${label}`, '#2e7d32');
@@ -113,7 +113,7 @@ class AITaskManager {
             id: 'task_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
             type, label,
             status: 'running',
-            result: null, error: null,
+            error: null,
             createdAt: Date.now(), completedAt: null
         };
         this.tasks.unshift(task);
@@ -183,10 +183,15 @@ class AITaskManager {
         } catch { return []; }
     }
 
+    // ★ 只落这 7 个字段，**不落 result**：任务中心记的是「发生过什么」（谁 / 类型 / 状态 /
+    //   起止时间 / 失败原因），产物本身归业务层自己的库（正文进自己的 DB、图片进图片库）。
+    //   任务中心再存一份既没人读——面板只渲染 label/error/时间，getTask()/listTasks() 全项目
+    //   无人调用——又是实打实的重复存：一张 base64 图或一章小说就能把 localStorage 顶爆。
+    //   调用方不受影响：submit/watch 的返回值与 onComplete 回调照旧带着完整结果。
     _save() {
         const toSave = this.tasks.map(t => ({
             id: t.id, type: t.type, label: t.label,
-            status: t.status, result: t.result, error: t.error,
+            status: t.status, error: t.error,
             createdAt: t.createdAt, completedAt: t.completedAt
         }));
         localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));

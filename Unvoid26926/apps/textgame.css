@@ -1,0 +1,1012 @@
+/* apps/textgame.css — 文游模块
+ *
+ * 全部类名带 tg- 前缀（模块隔离，见 [[module-css-isolation]]）。
+ * 主题只改外壳：内页永远浅色，一律吃 --panel / --text / --muted / --line / --accent（AI/03）。
+ * 模块自己的色只用在一处：--tg-tint（书卷绿），标「你在哪一条线上」，不跟主题走。
+ */
+
+.tg-page {
+    --tg-tint: #4E8A6B;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--panel);
+    font-size: 14px;
+    color: var(--text);
+}
+
+/* 子页（剧本详情 / 游玩）让位整条全局返回栏，返回由页内自画的 ← 承担。
+   同 divination.css / bookClub.css 的 :has() 先例。 */
+.phone-screen:has(.tg-page[data-tg-page]:not([data-tg-page="list"])) #topBar {
+    display: none;
+}
+
+/* ============ 通用零件 ============ */
+
+.tg-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 16px 24px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.tg-card {
+    background: var(--panel-strong);
+    border: 1px solid #ececf0;
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+}
+
+.tg-card-title {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.tg-sec-title {
+    font-size: 12px;
+    color: var(--muted);
+    font-weight: 600;
+    margin: 16px 2px 8px;
+}
+
+.tg-empty {
+    text-align: center;
+    color: #aaa;
+    font-size: 13px;
+    line-height: 1.7;
+    padding: 28px 12px;
+}
+
+.tg-hint {
+    font-size: 11px;
+    color: #aaa;
+    line-height: 1.5;
+    margin-top: 8px;
+}
+
+.tg-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+/* 按钮 */
+.tg-btn {
+    flex: 1;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 11px 14px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.tg-btn:active { opacity: .85; }
+.tg-btn:disabled { opacity: .45; cursor: default; }
+.tg-btn.ghost {
+    background: var(--panel-strong);
+    color: var(--muted);
+    border: 1px solid var(--line);
+}
+.tg-btn.sm { font-size: 12px; padding: 7px 12px; flex: 0 0 auto; }
+
+/* 开局那一下（「▶️ 直接开场」/「▶️ 以「X」开场」）：这一页唯一的主行动，**满宽**。
+   不给它定宽的话它是一颗贴着左边的小胶囊——上面两个框都是满宽的，它只有 107px
+   （实测 302 的内容区里占 107，右边空 195），而且标签随名字长短变宽
+   （填个名字就跳到 163px），一打字就抽一下。`flex: 1` 在这里不起作用：
+   它不在 .tg-row 里，是卡片的直接子元素。高度与圆角比输入框大一号，跟上面那栏拉开 14px。 */
+.tg-start .tg-btn {
+    display: block;
+    width: 100%;
+    margin-top: 14px;
+    padding: 13px 14px;
+    border-radius: 14px;
+    font-size: 15px;
+    box-shadow: 0 3px 10px rgba(11, 147, 246, .22);
+}
+.tg-start .tg-btn:active { opacity: 1; box-shadow: 0 1px 4px rgba(11, 147, 246, .28); }
+
+.tg-icon-btn {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tg-icon-btn:active { background: #f0f0f3; }
+.tg-icon-btn.sm { width: 28px; height: 28px; font-size: 14px; }
+/* 灰掉要看得见：颜色是写死的 --muted，浏览器默认那点灰不够看（风格预设的 ↑↓ 用） */
+.tg-icon-btn:disabled { opacity: .3; cursor: default; }
+.tg-icon-btn:disabled:active { background: transparent; }
+
+.tg-head-btn {
+    min-width: 56px;
+    border: 1px solid var(--line);
+    background: var(--panel-strong);
+    color: var(--muted);
+    border-radius: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+/* 输入 */
+.tg-in, .tg-ta {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-strong);
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    padding: 10px 12px;
+    outline: none;
+}
+.tg-in:focus, .tg-ta:focus { border-color: var(--tg-tint); }
+.tg-ta { resize: vertical; min-height: 96px; line-height: 1.6; }
+.tg-ta-sm { min-height: 60px; }
+.tg-card .tg-in + .tg-ta,
+.tg-card .tg-in + .tg-btn,
+.tg-card .tg-ta + .tg-btn { margin-top: 8px; }
+/* 风格预设的编辑面板：框下面连着两行（位置二选一 / 保存删除），中间得留缝。
+   别的卡都只有一行按钮，所以这两条只对这一个面板起作用。 */
+.tg-card .tg-ta + .tg-row { margin-top: 10px; }
+.tg-card .tg-row + .tg-row { margin-top: 8px; }
+
+.tg-import .tg-ta { min-height: 140px; font-size: 13px; }
+.tg-import .tg-row { margin-top: 10px; }
+
+/* ============ 子页头栏 ============ */
+
+.tg-subnav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 10px;
+    border-bottom: 1px solid #ececf0;
+    background: var(--panel-strong);
+    flex: 0 0 auto;
+}
+
+.tg-subnav-main { flex: 1; min-width: 0; }
+
+.tg-subnav-title {
+    font-weight: 700;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tg-subnav-note {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+}
+
+/* ⋯ 菜单 = **从右边滑进来的抽屉**（照模拟小城点头像那个：遮罩 + 右对齐整高面板 +
+   头一行标题与 ✕ + 内容区自己滚）。原来是在正文之上顶出一条内联面板：加了风格预设
+   那一区之后内容将近两屏，内联怎么限高都得滚，还把正文挤成一条缝。
+   定位用 absolute（最近的定位祖先是 .phone-screen）⇒ 正好铺满手机屏、跟着屏走，
+   不往外溢到桌面。
+   动画只在刚打开那一次播：这个菜单勾一条就重画一次，每次都播会一直抖
+   （开关在 view.menuAnim，见 apps/textgame.js）。 */
+.tg-modal {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    background: rgba(20, 15, 40, .45);
+    display: flex;
+    justify-content: flex-end;
+}
+.tg-modal.is-anim { animation: tgFade .18s ease; }
+.tg-modal.is-anim .tg-menu { animation: tgDrawerIn .26s cubic-bezier(.2, .9, .3, 1); }
+@keyframes tgFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tgDrawerIn { from { transform: translateX(100%); } to { transform: none; } }
+
+.tg-menu {
+    width: min(320px, 88%);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-strong);
+    border-radius: 18px 0 0 18px;
+    box-shadow: -8px 0 30px rgba(20, 15, 40, .18);
+    overflow: hidden;
+}
+
+.tg-menu-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 10px 16px;
+    border-bottom: 1px solid #ececf0;
+}
+.tg-menu-title { flex: 1; font-size: 14px; font-weight: 700; color: var(--text); }
+
+/* 唯一的一条滚动面（下面那些 .tg-pick 不再各自滚） */
+.tg-menu-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 8px 14px;
+}
+
+.tg-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    padding: 10px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.tg-menu-item:active { background: #f2f2f5; }
+.tg-menu-item.danger { color: #e53935; }
+
+/* 菜单里那句解释（显示方式那一项）：不点也看得见它到底改了什么 */
+.tg-menu-note {
+    font-size: 11px;
+    line-height: 1.6;
+    color: #a0a0a8;
+    padding: 0 10px 6px;
+}
+
+/* ============ 剧本库 ============ */
+
+.tg-recent { padding: 4px 6px; }
+
+.tg-run {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+}
+.tg-run + .tg-run { border-top: 1px solid #f2f2f5; }
+.tg-run:active { background: #f6f6f8; }
+.tg-run-main { flex: 1; min-width: 0; }
+
+.tg-run-name {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tg-run-note {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.tg-run-go { font-size: 12px; color: var(--tg-tint); flex: 0 0 auto; }
+
+.tg-script {
+    cursor: pointer;
+    position: relative;
+    padding-left: 16px;
+}
+.tg-script::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 12px;
+    bottom: 12px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--tg-tint);
+    opacity: .5;
+}
+.tg-script:active { background: #f6f6f8; }
+
+.tg-script-title { font-weight: 700; font-size: 14px; }
+.tg-script-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* ============ 剧本详情 ============ */
+
+.tg-run-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.tg-collapse { margin-top: 16px; }
+
+.tg-collapse-head {
+    width: 100%;
+    text-align: left;
+    border: 1px solid #ececf0;
+    background: var(--panel-strong);
+    color: var(--muted);
+    border-radius: 12px;
+    padding: 11px 14px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+/* 剧本正文 / 两块提示词：都是能改的长文本。
+   正文这一栏原来是只读的 <pre>（自带 max-height:50vh + overflow:auto），现在换成同样是框、
+   同样会滚的 <textarea>，区别只有一个：它能改。高度就定在 min-height 这一档，**不跟着内容
+   撑开**（撑开会把这一页拉成几千 px 的长条），多出来的字在框里自己滚、外层照旧只有一根。
+   提示词那两块本来就只有几行，矮一档。 */
+.tg-ta-long {
+    margin-top: 10px;
+    min-height: 240px;
+    font-size: 13px;
+    line-height: 1.75;
+}
+.tg-collapse .tg-row { margin-top: 8px; }
+
+/* 只读的框（现在只有「给 AI 的格式说明」那一格）：底色压一档 + 光标改成普通箭头，
+   让它一眼就是「拿来读、拿来复制的」，不是等着你打字的地方——不然点进去敲两下没反应，
+   会以为是坏了。字色不压暗：这段说明是要一个字一个字读明白的。
+   ⚠️ 底色别拿 `--panel` 的近似值（#f8f8fa 那档跟页面底色只差 1，等于白写），
+   用这张页面里已经在用的那档浅底 #f6f6f8（跟行「按下」时同一档；它跟白底差 9 档，看得见）。 */
+.tg-ta[readonly] {
+    background: #f6f6f8;
+    cursor: default;
+}
+
+.tg-prompt {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+}
+.tg-prompt .tg-btn.sm { align-self: flex-start; }
+.tg-prompt .tg-ta-long { margin-top: 0; min-height: 170px; }
+.tg-prompt .tg-hint { margin-top: 0; }
+
+/* ⋯ 菜单里选预设那一行 chips：一屏放得下，不跟正文抢地方。
+   （原来每份一卡、两行字，三五份就顶掉半屏，手指也容易点到隔壁那份上。） */
+.tg-picks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 10px 8px;
+}
+.tg-chip {
+    max-width: 100%;
+    padding: 5px 10px;
+    border: 1px solid #e6e6ec;
+    border-radius: 999px;
+    background: #fff;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.tg-chip:active { background: #f2f2f5; }
+.tg-chip.is-on { background: #e8f5ee; border-color: #7cc49c; font-weight: 600; }
+
+/* 预设展开之后的那一块：**一份预设只有一张卡**（.tg-card，展开的在卡里长出来）。
+   原来是一层卡套一层卡（这份一张、条目一张、编辑面板再一张），四层边框叠着，
+   内容还没看先被框占满了。现在卡里只有两种东西：条目行（细线分隔，同 .tg-run）
+   与编辑面板（浅底内嵌、没有边框）。
+   深浅三档：卡 #fff > 编辑面板 #f1f1f6 > 页面底 --panel #f8f8fa。
+   ⚠️ 面板那一档**不能照着 --panel 挑近似色**（先写的 #f7f7fa 跟页面底色只差 1，等于没有）：
+   要压得下去才看得出来是「贴在那一行底下的一块」。 */
+.tg-pack-body { margin-top: 6px; }
+.tg-pack-body .tg-empty { padding: 14px 8px; }
+
+/* 栏标题缩进到跟条目名一条竖线上（行自己有 8px 内边距，卡另有 14px） */
+.tg-pack-body .tg-sec-title { margin-left: 8px; }
+
+/* 条目行：底是卡的白底，所以细线与按下色都跟 .tg-run 那一套用同样的值 */
+.tg-entry + .tg-entry { border-top: 1px solid #f2f2f5; }
+
+.tg-entry-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+}
+.tg-entry-row:active { background: #f6f6f8; }
+/* 展开中：这一行跟底下的面板连成一块——上面的圆角留着，下面的切平接住面板。
+   这个类跟「面板会渲染出来」是同一个条件，所以底下一定有东西接着。 */
+.tg-entry-row.is-open { background: #eeeef3; border-radius: 10px 10px 0 0; }
+
+/* 编辑面板：浅底、没有边框，上面两角切平接住那一行 */
+.tg-editor {
+    background: #f1f1f6;
+    border-radius: 0 0 12px 12px;
+    padding: 10px 12px;
+    margin: 0 0 10px;
+}
+/* 「＋ 加一条」那个面板不在某一行底下，是独立一块：四角都圆 */
+.tg-pack-body > .tg-editor { border-radius: 12px; margin-top: 2px; }
+/* 输入框在浅底面板上回到白底，边界才看得见（.tg-in/.tg-ta 本来就是白的，这里是写明意图） */
+.tg-editor .tg-in, .tg-editor .tg-ta { background: #fff; }
+/* 框下面连着两行按钮（位置二选一 / 保存删除），中间得留缝。`.tg-card` 那三条是同样的值，
+   面板既然能单独放（新条目那一块就在卡里、不在某一行的底下），就自己带一份，不靠上下文。 */
+.tg-editor .tg-in + .tg-ta,
+.tg-editor .tg-in + .tg-btn,
+.tg-editor .tg-ta + .tg-btn { margin-top: 8px; }
+.tg-editor .tg-ta + .tg-row { margin-top: 10px; }
+.tg-editor .tg-row + .tg-row { margin-top: 8px; }
+.tg-editor .tg-hint { margin-top: 6px; }
+
+/* 开局卡片里「从名册挑一个主角」那一栏：挑中的那个名单列表里高亮着，
+   挑完下面挂一行「引用中」。列表定高自己滚——名册可能有几十号人，
+   不设上限会把这一页拉长。 */
+.tg-pick {
+    margin-top: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #ececf0;
+    border-radius: 12px;
+    background: #fff;
+}
+.tg-pick-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    border-bottom: 1px solid #f3f3f6;
+    background: none;
+    padding: 9px 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+.tg-pick-item:last-child { border-bottom: none; }
+/* 菜单里那几栏（选预设 / 两栏条目）**不各自滚**：滚动面只留 .tg-menu-body 那一条。
+   两层滚动条套在一起最难用——手指划在里层，划不动的时候外层也不会接着走。 */
+.tg-menu .tg-pick { max-height: none; overflow-y: visible; }
+.tg-pick-item:active { background: #f2f2f5; }
+.tg-pick-item.is-on { background: #eef6f1; }
+.tg-pick-name { display: block; font-size: 13px; color: var(--text); }
+.tg-pick-item.is-on .tg-pick-name { font-weight: 600; }
+.tg-pick-desc {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: #aaa;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tg-ref {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #eef6f1;
+    font-size: 12px;
+    color: #4E8A6B;
+}
+.tg-ref .tg-icon-btn { margin-left: auto; }
+
+/* ============ 游玩：一节一页 ============ */
+
+.tg-stream {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 14px 8px;
+    -webkit-overflow-scrolling: touch;
+    /* 白纸面：正文那张卡脱壳之后，垫底的这一层就是「纸」，字直接坐在它上面 */
+    background: var(--panel-strong);
+}
+
+.tg-note {
+    font-size: 11px;
+    color: #b08d3a;
+    background: #fdf6e3;
+    border-radius: 8px;
+    padding: 7px 10px;
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+/* 一页只有当前这一节（.is-current）；另外两张 .is-busy/.is-stuck 是它的占位卡 */
+.tg-turn {
+    position: relative;
+    background: #fbfbfd;
+    border: 1px solid #ececf0;
+    border-radius: 14px;
+    padding: 12px 14px 12px;
+    margin-bottom: 10px;
+}
+
+/* 正文这一张的**底**：脱壳（一节一页 ⇒ 一页上只有它，「把这一节和上一节分开」这个职责没有了，
+   壳就只剩把正文缩一圈，少约 30px 宽）。两种显示方式谁要壳由下面那两条决定：
+   **自由模式停在这里（脱壳）**，**普通模式由 .is-plain 把壳加回来**。
+   ⚠️ 只脱 .is-current 这一张：.is-busy / .is-stuck 是**状态占位卡**，形状要留着——
+   跟正文长成一个样，就看不出「这一步还没落」了。 */
+.tg-turn.is-current {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+}
+
+/* 普通模式（.is-plain，由渲染层按显示方式加）：卡片的形留着——它是模块自己画的纯文字，
+   一个框都没有，卡片是它唯一的边界。底色不再用 --panel-strong：纸面已经是白的，
+   白卡在白纸上等于没有卡——立住靠的是边线与圆角。
+   ⚠️ 反过来成立：**自由模式没有这个类，脱壳**——那份美化内容是**剧本自己画的**，自带圆角 / 边框 /
+   底色，模块再套一层就是叠着的第二个框，还白丢约 30px 宽（用户 2026-09-19 口径，原因见 textgame.js
+   currentTurnHtml 的注释）。 */
+.tg-turn.is-current.is-plain {
+    border: 1px solid #e8eaee;
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+
+.tg-turn-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.tg-turn-no {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--tg-tint);
+    background: #eef4f0;
+    border-radius: 8px;
+    padding: 2px 7px;
+}
+
+.tg-turn-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: #555;
+    font-weight: 600;
+    word-break: break-word;
+}
+.tg-turn-input.is-open { color: #aaa; font-weight: 500; }
+
+.tg-turn-body {
+    /* 读长文的那一档：15px / 1.9（用户 2026-09-19 口径「字可以小一点」，16px 在这条窄栏里偏大）。
+       ⚠️ 沙箱里那份（FREE_STYLE，自由模式画 HTML 用）是**另一份**，改这里它不会跟着变——
+       字号两边都是 15px，行高（1.85 / 1.9）与字距还没对上，要么两边一起改，要么先让它差着。 */
+    font-size: 15px;
+    line-height: 1.9;
+    color: #26262b;
+    word-break: break-word;
+    /* 中文字族自己点名：不点就全靠系统兜底，换台设备换一副字。
+       拉丁字体排在中文字体**前面**：拉丁走 Segoe UI / SF，汉字才落到苹方 / 雅黑 / Noto */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+}
+
+/* AI 正文里的 Markdown（mdToHtml 的输出） */
+.tg-turn-body p { margin: 0 0 .8em; }
+.tg-turn-body p:last-child { margin-bottom: 0; }
+/* 标题要分得出级——以前 h1~h6 一律压成 15px，`## 巷口` 画出来只是「加粗的一行」 */
+.tg-turn-body h1, .tg-turn-body h2, .tg-turn-body h3,
+.tg-turn-body h4, .tg-turn-body h5, .tg-turn-body h6 {
+    font-weight: 700;
+    color: #1b1b20;
+    letter-spacing: .04em;
+    margin: 1.1em 0 .5em;
+}
+.tg-turn-body h1 { font-size: 17px; }
+.tg-turn-body h2 { font-size: 16px; }
+.tg-turn-body h3, .tg-turn-body h4,
+.tg-turn-body h5, .tg-turn-body h6 { font-size: 15px; margin: .9em 0 .4em; }
+.tg-turn-body ul, .tg-turn-body ol { margin: .4em 0 .8em; padding-left: 1.4em; }
+.tg-turn-body li { margin: .2em 0; }
+.tg-turn-body blockquote {
+    margin: .6em 0;
+    padding: 2px 0 2px 10px;
+    border-left: 3px solid #e2e2e8;
+    color: #666;
+}
+.tg-turn-body hr { border: none; border-top: 1px solid #e8e8ee; margin: 1.1em 0; }
+.tg-turn-body code {
+    background: #f2f3f6;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 14px;      /* 行内代码掉太多号会像补丁（正文 15px） */
+}
+.tg-turn-body a { color: var(--accent); }
+.tg-turn-body strong { font-weight: 700; }
+
+/* 普通模式的正文版式（2026-09-19 用户口径：**只改普通这一档**）：
+   每段首行缩进两格、标题与「【状态面板】」这类标题栏居中。
+   选择器认 .is-plain（= 普通模式）：自由模式那份美化内容是**剧本自己画的**，版式归剧本自己管。
+   缩进只给天然段——列表 / 引用顶格才是它们该有的样子，标题居中，不留缩进。 */
+.tg-turn.is-plain .tg-turn-body p { text-indent: 2em; margin-bottom: .3em; }
+.tg-turn.is-plain .tg-turn-body p:last-child { margin-bottom: 0; }
+.tg-turn.is-plain .tg-turn-body li,
+.tg-turn.is-plain .tg-turn-body blockquote { text-indent: 0; }
+.tg-turn.is-plain .tg-turn-body h1, .tg-turn.is-plain .tg-turn-body h2,
+.tg-turn.is-plain .tg-turn-body h3, .tg-turn.is-plain .tg-turn-body h4,
+.tg-turn.is-plain .tg-turn-body h5, .tg-turn.is-plain .tg-turn-body h6 {
+    text-align: center;
+    text-indent: 0;
+}
+/* 标题栏（渲染层把 `【状态面板】` 这类整行成框的短行画成它，见 plainBodyHtml） */
+.tg-turn.is-plain .tg-turn-body .tg-banner { text-align: center; margin: .8em 0 .5em; }
+.tg-turn.is-plain .tg-turn-body .tg-banner:first-child { margin-top: 0; }
+
+/* 状态面板（AI 输出里的 ``` 代码块）——正文一律保留，只换画法。
+   ★ 继承是真陷阱：.tg-turn-body 的 font-size / line-height / letter-spacing / word-break
+   都可继承，<pre> 照单全收 ⇒ 面板里靠空格对齐的内容必然散架（且不是窄屏造成的）。
+   所以下面每一条都得显式写回。 */
+.tg-panel {
+    margin: .6em 0;
+    padding: 8px 10px;
+    /* 底色在白纸面上要**看得出**：脱壳前它跟页面底只差一个色阶，几乎糊成一片 */
+    background: #f6f7f9;
+    border: 1px solid #e8eaee;
+    border-radius: 8px;
+    overflow-x: auto;              /* 空白策略取保对齐：不折行，放不下就横向滚 */
+}
+.tg-panel pre {
+    margin: 0;                     /* UA 的 pre { margin: 1em 0 } 没有任何现有规则会覆盖它 */
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    letter-spacing: normal;
+    word-break: normal;
+    white-space: pre;
+    color: #45454d;
+}
+.tg-panel:last-child { margin-bottom: 0; }
+
+/* 「接着走」——当前这一节的全部后续（1 条也列，所以这一页本身就是顺序通读）。
+   ★ 它同时是「往前读下一节」和「选一条分叉」的那个入口，所以每一行都得手指够得着。 */
+.tg-branches {
+    margin: 2px 2px 10px;
+}
+
+.tg-branches-head { font-size: 11px; color: var(--muted); margin: 0 0 6px 2px; }
+
+.tg-branch {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 1px solid #ececf0;
+    background: #fafafc;
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    /* 可点区 ≥ 44px：两行文案自己撑得到，但窄屏幕上字号一缩就不一定了，min-height 兜住 */
+    min-height: 44px;
+    box-sizing: border-box;
+}
+.tg-branch:active { background: #f2f2f5; }
+.tg-branch:last-child { margin-bottom: 0; }
+
+.tg-branch-name { display: block; font-size: 12px; font-weight: 600; color: var(--tg-tint); }
+.tg-branch-tail {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+/* 生成中 / 中断（白纸面上要立得住：底色比正文纸面灰一点、虚线也加深一档） */
+.tg-turn.is-busy, .tg-turn.is-stuck { border-style: dashed; border-color: #dcdee6; }
+
+.tg-busy {
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.tg-dots::after {
+    display: inline-block;
+    width: 1.2em;
+    content: '';
+    animation: tgDots 1.2s steps(4, end) infinite;
+}
+@keyframes tgDots {
+    0% { content: ''; }
+    25% { content: '.'; }
+    50% { content: '..'; }
+    75% { content: '...'; }
+}
+
+.tg-turn.is-stuck .tg-row { margin-top: 10px; }
+
+/* ============ 节点目录 ============
+   缩进是**嵌套**出来的（.tg-node-kids 的 margin-left），不是 depth 内联样式：
+   嵌套天然带树线，也没有层级上限（超过 MAX_INDENT 层就不再套，见 textgame.js）。
+   缩进的每一层都吃一行宽度，所以每层只给 12px——手机屏上这是最宽的一档了。 */
+
+.tg-dir { padding-bottom: 8px; }
+
+.tg-node-kids {
+    margin-left: 12px;
+    border-left: 1px dashed #e4e4ea;
+    padding-left: 4px;
+}
+
+.tg-node-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 7px 8px;
+    border-radius: 10px;
+    margin-bottom: 2px;
+    cursor: pointer;
+    /* 可点区 ≥ 44px：本模块只给少数几个真按钮留的硬约定 */
+    min-height: 44px;
+    box-sizing: border-box;
+}
+.tg-node-row:active { background: #f2f2f5; }
+
+/* 「你在这」那一行：底色 + 左边一条色，跟游玩页的当前节同一个语汇 */
+.tg-node-row.is-current {
+    background: #f4f8f6;
+    box-shadow: inset 3px 0 0 var(--tg-tint);
+}
+/* 当前这条路径上的行：只把步数染成模块色——一眼看出「这条线是我走过的」 */
+.tg-node-row.is-path .tg-node-no { color: var(--tg-tint); background: #eef4f0; }
+
+.tg-node-fold {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    margin-top: 1px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tg-node-fold:active { background: #eaeaef; border-radius: 6px; }
+/* 没有孩子的行：占住同一个宽度，让所有行的字号起点对齐 */
+.tg-node-fold.is-leaf { color: #d8d8de; }
+
+.tg-node-main { flex: 1; min-width: 0; }
+
+.tg-node-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 3px;
+}
+
+.tg-node-no {
+    font-size: 10px;
+    font-weight: 700;
+    color: #9a9aa2;
+    background: #f2f2f5;
+    border-radius: 8px;
+    padding: 2px 6px;
+}
+
+.tg-node-fork {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--tg-tint);
+    background: #eef4f0;
+    border-radius: 8px;
+    padding: 2px 6px;
+}
+
+.tg-node-here {
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--tg-tint);
+    border-radius: 8px;
+    padding: 2px 6px;
+}
+
+.tg-node-input {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #555;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.tg-node-tail {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-top: 2px;
+    word-break: break-word;
+}
+
+/* ============ 游玩：底部操作区 ============ */
+
+.tg-composer {
+    flex: 0 0 auto;
+    border-top: 1px solid #ececf0;
+    background: var(--panel-strong);
+    padding: 10px 14px 12px;
+}
+
+.tg-error {
+    background: #fdecec;
+    border-radius: 10px;
+    padding: 9px 11px;
+    margin-bottom: 9px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tg-error-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: #c62828;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.tg-error .tg-btn.sm { background: #e53935; }
+
+/* 认出来的选项块：**只是样式，不是按钮**——原文照旧在正文里，选哪条自己往输入框里打。
+   做成按钮会与正文重复，回看旧节还要额外算「那些按钮算谁的」（用户 2026-09-18 口径）。 */
+.tg-choice {
+    margin: .8em 0;
+    padding: 6px 10px 8px;
+    border-left: 3px solid #c3d8cb;
+    background: #f5f9f7;
+    border-radius: 0 8px 8px 0;
+}
+.tg-choice-head {
+    font-size: 12px;
+    color: #8a8f8c;
+    letter-spacing: .04em;
+    margin-bottom: 4px;
+}
+.tg-choice-row {
+    padding: 3px 0;
+    color: #2f2f33;
+}
+.tg-choice-row + .tg-choice-row { border-top: 1px dashed #e6ece9; }
+
+/* 自由模式：正文里的 HTML 画在这个沙箱框里（sandbox 不给 allow-scripts ⇒ 里面的 JS 不跑）。
+   高度由 fitFreeFrames 量出来写进行内样式，这里的高度只是**量到之前**的兜底。 */
+.tg-free {
+    display: block;
+    width: 100%;
+    height: 120px;
+    border: 0;
+    background: transparent;
+}
+
+/* ============ 「伪沉浸」（临时件，2026-09-26）============
+   顶栏那个小圆点点开之后，**剧本自己画的那一节**（有沙箱框的那种）出血到屏幕边：.tg-stream
+   左右各 14px 的留白在它两边就是两条白边——剧本画的是一张满宽卡，看起来却像贴在纸上的贴纸。
+   **默认关**；以后做真正的沉浸模式时，这一整块连同 .tg-dot-btn 那两段一起去掉，
+   行为即回到「留白都在」。
+   ⚠️ **只出血这一节**：AI 这轮没吐 HTML 的节走 textHtml，那是模块自己画的字，留白还得有
+   （`.tg-free` 只在自由模式出现，所以这条天然只落在自由那一档；普通模式没有框、一条都不吃）。
+   -14px 与 .tg-stream 的左右内边距是同一个数，改那边记得改这里。 */
+.tg-stream.is-pseudo-immersive .tg-turn-body:has(> .tg-free) {
+    margin-left: -14px;
+    margin-right: -14px;
+}
+
+/* 顶栏那个小圆点（只在自由模式出现，在 🌳 左边）：空心 = 关，实心 = 开。
+   点区仍是 34px（跟 .tg-icon-btn 同款），圆点本身只有 10px——小圆点不等于小热区。 */
+.tg-dot-btn {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tg-dot-btn::before {
+    content: '';
+    width: 10px;
+    height: 10px;
+    box-sizing: border-box;
+    border: 1.5px solid var(--muted);
+    border-radius: 50%;
+}
+.tg-dot-btn.is-on::before { background: var(--tg-tint); border-color: var(--tg-tint); }
+/* ============ 「伪沉浸」到此为止 ============ */
+
+.tg-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.tg-in.tg-action { flex: 1; border-radius: 20px; padding: 10px 14px; }
+
+.tg-send {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+}
+.tg-send:disabled { opacity: .4; cursor: default; }
+
+/* ============ 提示 ============ */
+
+.tg-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 84px;
+    z-index: 60;             /* 压过 ⋯ 菜单那个抽屉（z-index 50）：提示不能躲在弹窗后面 */
+    transform: translateX(-50%) translateY(8px);
+    background: rgba(0, 0, 0, .82);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 9px 16px;
+    border-radius: 18px;
+    max-width: 280px;
+    text-align: center;
+    z-index: 3000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s, transform .2s;
+}
+.tg-toast.is-show { opacity: 1; transform: translateX(-50%) translateY(0); }

@@ -1,0 +1,979 @@
+/* creator-space/crystal.css — 缔造者空间独立样式 */
+
+/* ---- 页面布局 ---- */
+.creator-page {
+    padding: 0;
+}
+
+.creator-content {
+    padding: 0;
+    position: relative;  /* 为浮动按钮和浮层提供定位参考 */
+    min-height: 300px;
+}
+
+.creator-card-flat {
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.creator-padded {
+    padding: 16px;
+}
+
+/* ---- 欢迎语 ---- */
+.creator-welcome {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 12px;
+}
+
+/* ---- 分区标题（可折叠） ---- */
+.creator-section {
+    padding: 0 16px;
+}
+
+.creator-section-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: #5b6abf;
+    padding: 10px 0 8px;
+    user-select: none;
+    border-top: 1px solid #f0f0f0;
+}
+
+.creator-section-title .toggle-icon {
+    font-size: 12px;
+    color: #999;
+    transition: transform 0.2s;
+}
+
+.creator-section-title .toggle-icon.open {
+    transform: rotate(90deg);
+}
+
+/* ---- API 设置表单 ---- */
+.api-form {
+    padding: 8px 0 12px;
+}
+
+.api-form label {
+    font-size: 12px;
+    color: #888;
+    display: block;
+    margin-bottom: 3px;
+}
+
+.api-form input {
+    width: 100%;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    outline: none;
+    box-sizing: border-box;
+    font-family: inherit;
+    transition: border-color 0.2s;
+    margin-bottom: 8px;
+}
+
+.api-form input:focus {
+    border-color: #5b6abf;
+}
+
+.api-form .hint {
+    font-size: 11px;
+    color: #999;
+    margin-top: -6px;
+    margin-bottom: 8px;
+}
+
+.api-form .save-btn {
+    width: 100%;
+    padding: 9px;
+    border-radius: 8px;
+    border: none;
+    background: #5b6abf;
+    color: white;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background 0.2s;
+}
+
+.api-form .save-btn:hover {
+    background: #4a59a8;
+}
+
+.api-form .save-btn:active {
+    transform: scale(0.98);
+}
+
+.api-form .status-msg {
+    font-size: 12px;
+    text-align: center;
+    margin-top: 6px;
+    min-height: 18px;
+}
+
+/* ========== Aoi 浮动按钮 ========== */
+
+/* ★ 外观照池塘里那颗 Aoi（.aoi-fishing-body，styles.css）：蓝色渐变圆身、
+   半透明白边、内里一圈白光。两边同一个人，就该长一个样。 */
+.aoi-fab {
+    position: absolute;
+    bottom: 200px;
+    right: 20px;
+    width: 52px;
+    height: 52px;
+    box-sizing: border-box;
+    border-radius: 50% 50% 45% 45%;
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    background: linear-gradient(180deg, rgba(114, 214, 255, 0.98), rgba(67, 156, 214, 0.92));
+    color: white;
+    font-size: 22px;
+    cursor: pointer;
+    box-shadow: inset 0 4px 10px rgba(255, 255, 255, 0.5), 0 12px 20px rgba(34, 103, 149, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+    z-index: 100;
+    user-select: none;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* 内里的白光：池塘那颗的同款配方（inset 尺寸照抄，两者只差 2px） */
+.aoi-fab::before {
+    content: '';
+    position: absolute;
+    inset: 9px 14px 18px 14px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+    pointer-events: none;
+}
+
+.aoi-fab:hover {
+    transform: scale(1.08);
+    box-shadow: inset 0 4px 10px rgba(255, 255, 255, 0.5), 0 14px 24px rgba(34, 103, 149, 0.32);
+}
+
+.aoi-fab:active {
+    transform: scale(0.95);
+}
+
+/* ========== Aoi 对话浮层 ========== */
+
+.aoi-overlay {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: white;
+    z-index: 50;
+    flex-direction: column;
+    border-radius: 0;
+    animation: aoiSlideUp 0.25s ease;
+}
+
+.aoi-overlay.show {
+    display: flex;
+}
+
+@keyframes aoiSlideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- 浮层头部 ---- */
+.aoi-overlay-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    flex-shrink: 0;
+}
+
+.aoi-overlay-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+}
+
+.aoi-overlay-close {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: none;
+    background: #f5f5f5;
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, color 0.2s;
+}
+
+.aoi-overlay-close:hover {
+    background: #e0e0e0;
+    color: #666;
+}
+
+/* ---- 消息列表（复用原有样式，补充）---- */
+.aoi-msgs {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+}
+
+.aoi-msg {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    animation: aoiFadeIn 0.2s ease;
+}
+
+@keyframes aoiFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.aoi-msg.aoi {
+    flex-direction: row;
+}
+
+.aoi-msg.user {
+    flex-direction: row-reverse;
+}
+
+.aoi-avatar {
+    font-size: 18px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.aoi-bubble {
+    padding: 7px 11px;
+    border-radius: 12px;
+    max-width: 85%;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
+.aoi-msg.aoi .aoi-bubble {
+    background: #f0f2f8;
+    color: #333;
+    border-bottom-left-radius: 4px;
+}
+
+.aoi-msg.user .aoi-bubble {
+    background: #5b6abf;
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+/* ---- 输入区 ---- */
+.aoi-input-row {
+    display: flex;
+    gap: 6px;
+    padding: 10px 16px;
+    border-top: 1px solid #f0f0f0;
+    flex-shrink: 0;
+}
+
+.aoi-input-row input {
+    flex: 1;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 13px;
+    outline: none;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+
+.aoi-input-row input:focus {
+    border-color: #5b6abf;
+}
+
+.aoi-input-row .send-btn {
+    border: none;
+    border-radius: 10px;
+    background: #5b6abf;
+    color: white;
+    padding: 9px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+
+.aoi-input-row .send-btn:hover {
+    background: #4a59a8;
+}
+
+.aoi-input-row .send-btn:active {
+    transform: scale(0.97);
+}
+
+/* ========== 通用聊天窗口（chat-window.js）========== */
+
+.chat-window {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: white;
+    z-index: 50;
+    flex-direction: column;
+    animation: aoiSlideUp 0.25s ease;
+}
+
+.chat-window.show {
+    display: flex;
+}
+
+.chat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    flex-shrink: 0;
+}
+
+.chat-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+}
+
+.chat-close-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: none;
+    background: #f5f5f5;
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, color 0.2s;
+}
+
+.chat-close-btn:hover {
+    background: #e0e0e0;
+    color: #666;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+}
+
+.chat-msg {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    animation: aoiFadeIn 0.2s ease;
+}
+
+.chat-msg.agent {
+    flex-direction: row;
+}
+
+.chat-msg.user {
+    flex-direction: row-reverse;
+}
+
+.chat-avatar {
+    font-size: 18px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.chat-bubble {
+    padding: 7px 11px;
+    border-radius: 12px;
+    max-width: 85%;
+    word-break: break-word;
+    line-height: 1.45;
+}
+
+.chat-msg.agent .chat-bubble {
+    background: #f0f2f8;
+    color: #333;
+    border-bottom-left-radius: 4px;
+}
+
+.chat-msg.user .chat-bubble {
+    background: #5b6abf;
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+/* ---- Markdown 渲染样式 ---- */
+.chat-bubble h1,
+.chat-bubble h2,
+.chat-bubble h3,
+.chat-bubble h4,
+.chat-bubble h5,
+.chat-bubble h6 {
+    margin: 8px 0 4px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.chat-bubble h1 { font-size: 16px; }
+.chat-bubble h2 { font-size: 15px; }
+.chat-bubble h3 { font-size: 14px; }
+.chat-bubble h4,
+.chat-bubble h5,
+.chat-bubble h6 { font-size: 13px; }
+
+.chat-bubble p {
+    margin: 4px 0;
+}
+
+.chat-bubble code {
+    background: rgba(0,0,0,0.06);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+}
+
+.chat-bubble pre code {
+    display: block;
+    padding: 8px 10px;
+    margin: 6px 0;
+    background: rgba(0,0,0,0.05);
+    border-radius: 6px;
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.chat-bubble a {
+    color: #5b6abf;
+    text-decoration: underline;
+}
+
+.chat-bubble blockquote {
+    margin: 6px 0;
+    padding: 4px 10px;
+    border-left: 3px solid #5b6abf;
+    color: #666;
+    font-style: italic;
+}
+
+.chat-bubble ul,
+.chat-bubble ol {
+    margin: 4px 0;
+    padding-left: 20px;
+}
+
+.chat-bubble li {
+    margin: 2px 0;
+}
+
+.chat-bubble hr {
+    border: none;
+    border-top: 1px solid #e0e0e0;
+    margin: 8px 0;
+}
+
+
+.chat-input-row {
+    display: flex;
+    gap: 6px;
+    padding: 10px 16px;
+    border-top: 1px solid #f0f0f0;
+    flex-shrink: 0;
+}
+
+.chat-input-row input {
+    flex: 1;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 13px;
+    outline: none;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+
+.chat-input-row input:focus {
+    border-color: #5b6abf;
+}
+
+.chat-file-btn {
+    border: none;
+    border-radius: 10px;
+    background: #f0f2f8;
+    color: #5b6abf;
+    padding: 9px 10px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+
+.chat-file-btn:hover {
+    background: #e0e4f0;
+}
+
+.chat-file-btn:active {
+    transform: scale(0.95);
+}
+
+
+.chat-send-btn {
+    border: none;
+    border-radius: 10px;
+    background: #5b6abf;
+    color: white;
+    padding: 9px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+
+.chat-send-btn:hover {
+    background: #4a59a8;
+}
+
+.chat-send-btn:active {
+    transform: scale(0.97);
+}
+
+/* ---- 显示更早消息按钮 ---- */
+.chat-show-more {
+    display: block;
+    width: 100%;
+    padding: 8px;
+    border: 1px dashed #d0d5e8;
+    border-radius: 8px;
+    background: #f8f9fc;
+    color: #5b6abf;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.2s;
+    font-family: inherit;
+    margin-bottom: 8px;
+}
+
+.chat-show-more:hover {
+    background: #eef0f6;
+}
+
+.chat-show-more:active {
+    transform: scale(0.98);
+}
+
+
+/* ---- 长消息折叠 ---- */
+.collapsible-wrap {
+    position: relative;
+}
+
+.collapsible-preview {
+    display: block;
+}
+
+.collapsible-full {
+    display: none;
+}
+
+.collapsible-toggle {
+    display: block;
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 1px solid #d0d5e8;
+    border-radius: 6px;
+    background: #f5f6fa;
+    color: #5b6abf;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-family: inherit;
+    user-select: none;
+}
+
+.collapsible-toggle:hover {
+    background: #e8eaf5;
+}
+
+.collapsible-toggle:active {
+    transform: scale(0.98);
+}
+
+/* ---- 房间布局 ---- */
+.creator-room {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(170deg, #faf6f0 0%, #f0ebe3 100%);
+    overflow: hidden;
+}
+
+/* ---- 房间顶部栏 ---- */
+.room-top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    flex-shrink: 0;
+}
+
+.room-name {
+    font-size: 13px;
+    color: #b8a99a;
+    font-weight: 500;
+    letter-spacing: 1px;
+}
+
+.room-exit-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(180, 160, 140, 0.15);
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, transform 0.2s;
+}
+
+.room-exit-btn:hover {
+    background: rgba(180, 160, 140, 0.3);
+    transform: scale(1.1);
+}
+
+.room-exit-btn:active {
+    transform: scale(0.95);
+}
+
+/* ---- 房间氛围区 ---- */
+.room-atmosphere {
+    text-align: center;
+    padding: 20px 16px 12px;
+    flex-shrink: 0;
+}
+
+.room-window {
+    display: inline-block;
+    background: #dce8f0;
+    border-radius: 12px;
+    padding: 8px 20px;
+    font-size: 13px;
+    color: #5a7a8a;
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.05);
+    margin-bottom: 8px;
+}
+
+.room-clock {
+    font-size: 28px;
+    font-weight: 300;
+    color: #6b5d4f;
+    letter-spacing: 2px;
+    margin: 4px 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.room-greeting {
+    font-size: 14px;
+    color: #9a8b7a;
+    margin-top: 4px;
+}
+
+/* ---- 房间内卡片 ---- */
+/* ★ 这两行是「设置浮层能盖住桌面场景」的**唯一支点**，与 .room-desk-scene 的 z-index:1 配对：
+   卡带 backdrop-filter ⇒ 它既是绝对定位后代的包含块（浮层 top:100% 正好挂在卡下沿），
+   又自成层叠上下文 ⇒ 浮层写多大 z-index 都只在卡内部排序、抬不出去，
+   所以必须把 z-index 提到卡这一层，让「卡 + 卡里的浮层」整体压过场景。
+   ⚠️ 别删这两行；⚠️ 也别给卡加 overflow:hidden（有人为修圆角会这么干）——浮层会被当场裁掉。 */
+.creator-room .page-card {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(4px);
+    border-radius: 12px;
+    margin: 0 16px;
+    position: relative;
+    z-index: 30;
+}
+
+.creator-room .aoi-fab {
+    bottom: 160px;
+}
+
+/* ========== 设置浮层 ==========
+   房间把 aoi 的设置体当浮层用。**display 不碰** —— 显隐仍由 aoi-api.js 自己的 bind()
+   写 style.display 管着，这里只改盒模型，所以那个文件可以整个搬走、照常能用。
+
+   锚点＝那张设置卡（它有 backdrop-filter，天然是绝对定位后代的包含块），
+   top:100% 就是卡的下沿 —— 与狼人杀 .ww-board 挂 .ww-stage 是同一种关系。
+
+   ⚠️ #aoiApiBody 若在 aoi-api.js 里改名，这里会静默失效（**文件本身仍正常**，
+   只是退回「在流里展开」）。这是「Aoi 那侧保持可搬走」换来的，方向是有意的。 */
+.creator-room #aoiApiBody {
+    position: absolute;
+    /* 卡自己的下内边距是 16px，而 body 在流里正是从这个位置接上去的：
+       减掉这 16px，浮层的内容就落在原来那条线上 —— 展开时看不出它是浮层。
+       （.creator-padded 的 padding:16px，见上一条规则。） */
+    top: calc(100% - 16px);
+    left: 0;
+    right: 0;
+    z-index: 2;
+    /* ★ 压掉它内联的 padding:0 0 12px —— 内联样式除 !important 没有别的手段可压。
+       （本项目 CSS 极少用 !important：全项目 24 处，其余 23 处都在主题/子页让位的覆盖里。）
+       不压的话输入框会贴着浮层边缘。左右 32px 让字段与标题文字、那条分隔线对齐
+       （卡的 margin 16 + .creator-padded 16 + 标题行自己的 margin 16 = 48）；
+       下 28px = 它在流里自己的 12 + 原来那张卡给的 16，底边和改前一样宽裕。 */
+    padding: 0 32px 28px !important;
+    /* 上缘不留圆角、只圆下缘：接在卡下沿，看着就是那张卡长高了，而不是多出一块浮层 */
+    border-radius: 0 0 12px 12px;
+    /* 不描边、不投影、不做进场动画 —— 就为「和改前看着一样」。
+       底色是不透明的，但等于「卡的白 0.7 压在房间底色上」的合成色（差不到 1 个色阶），
+       所以既不透出下面的电脑，观感又与原来自带的白一致。 */
+    background: #fbfaf7;
+    /* 旋钮：内容约 286px，加内边距约 314px；浮层顶约在离房间顶 254px 处，
+       到房间底还剩约 400px。将来 .room-atmosphere 长高、或手机壳变矮，改这个数。 */
+    max-height: 360px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* Aoi 不在缔造者空间（在池塘）时，这扇 💠 门收起来 —— 它不在家，门口不该亮着灯。
+   用 visibility 收，不用 display：#aoiFab 的显示还会被聊天窗开关写内联 style.display，
+   而内联样式优先级高于类选择器，display 会被它顶回来。visibility 与它不相干。 */
+.creator-room.room-aoi-away .aoi-fab {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    /* visibility 的过渡是离散跳变：中间值一律按 visible 算 ——
+       所以加类时它随 opacity 一路淡出、到点才真隐藏；去类时立刻现形再淡入。 */
+    transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s, visibility 0.2s;
+}
+
+/* 浮球（z-index:100）会压住设置浮层右段的保存按钮、以及操作台右下角，
+   所以任一个浮层开着就让它淡出；关掉立刻回来，位置不用挪。 */
+.creator-room.room-aoi-float .aoi-fab,
+.creator-room.room-terminal-open .aoi-fab {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* ========== 桌面场景：桌子 + 电脑 ==========
+   房间自己的语言：柔、平、暖、低对比、圆角，只有很淡的 inset 高光和柔影，
+   **不上纹理、不描边**（对照 .room-window / .room-exit-btn）。
+   所以这里不搬书友会的木纹，也不搬池塘木牌的亮边浮雕。 */
+
+/* 贴房间底、整体抬起来一点。**别用「让 .room-main 变 flex:1 / position:relative」来达到这个效果**：
+   前者会让矮屏下桌子第一个被裁；后者会把 .aoi-fab 的包含块从 .creator-room
+   悄悄换成 .room-main（现在几何上碰巧重合，是隐式耦合）。绝对定位等价且零风险。 */
+.room-desk-scene {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 140px;   /* ★ 旋钮：把「平台 + 电脑」抬到房间中部（抬多少改这里） */
+    height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    z-index: 1;   /* 显式最低层：它就是布景。与 .creator-room .page-card 的 z-index:30 配对 */
+}
+
+/* ---- 平台：就一条暖色横板，不做腿、不做台沿 ----
+   一档 inset 高光吃顶光、一档柔影托住它，够读成「一块台子」了。 */
+.room-desk {
+    width: 84%;
+    height: 12px;
+    border-radius: 7px;
+    background: #dccab2;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 6px 16px rgba(150, 125, 100, 0.24);
+}
+
+/* ---- 电脑（可点，通往操作台）----
+   外壳照 .phone-wrapper/.phone-screen 的两层结构，内屏直接用 .room-window 的配方
+   —— 屋子里的窗和电脑屏本来就是一家人。 */
+.room-pc-wrap {
+    position: relative;    /* 操作台浮层的锚点 */
+    margin-bottom: -4px;   /* 让底座压进桌面：读成「放在桌上」而不是「浮在桌上方」 */
+}
+
+.room-pc {
+    position: relative;    /* 定位元素，画在无定位的桌子上方 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 10px 0;
+    border: 0;
+    background: none;
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.16s ease;
+}
+
+.room-pc-screen {
+    width: 128px;
+    height: 84px;
+    padding: 5px;
+    box-sizing: border-box;
+    border-radius: 12px;
+    background: #e4d6c1;   /* 暖白机壳（比房间底色深一档，否则糊在墙上） */
+    box-shadow: 0 6px 16px rgba(150, 125, 100, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    transition: box-shadow 0.2s ease;
+}
+
+.room-pc-screen::after {
+    content: '';
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    background: linear-gradient(165deg, #cfe2ee, #aecde0);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.07);
+}
+
+.room-pc-neck {
+    width: 11px;
+    height: 12px;
+    background: #d3c1aa;
+}
+
+.room-pc-base {
+    width: 50px;
+    height: 7px;
+    border-radius: 4px;
+    background: #cbb79b;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* 屏幕亮起来时用 Aoi 蓝（＝设置区标题、保存按钮那支 #5b6abf）作提示色 */
+.room-pc:hover .room-pc-screen,
+.room-pc:focus-visible .room-pc-screen {
+    box-shadow: 0 8px 20px rgba(91, 106, 191, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.room-pc:active {
+    transform: translateY(1px) scale(0.99);
+}
+
+/* ---- 操作台浮层（电脑点开的占位，内容以后往里加）----
+   **往上弹**：电脑在房间底部，往下会被 .creator-room 的 overflow:hidden 裁掉。 */
+.room-terminal {
+    display: none;
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%);
+    width: 268px;
+    z-index: 6;
+    border-radius: 14px;
+    background: #fffdf9;
+    box-shadow: 0 12px 26px rgba(150, 125, 100, 0.24);
+}
+
+/* 直接显示，不加进场动画 —— 它的居中靠 transform: translateX(-50%)，
+   而任何写 transform 的关键帧都会把这条居中顶掉（弹出时横向抖一下）。
+   ⚠️ 要给这里加动画，关键帧必须自己带上 translateX(-50%)。 */
+.room-terminal.open {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 朝下的小尖角，指着电脑 */
+.room-terminal::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    width: 12px;
+    height: 12px;
+    transform: translateX(-50%) rotate(45deg);
+    background: #fffdf9;
+}
+
+.room-terminal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 8px 16px;
+    border-bottom: 1px solid rgba(180, 160, 140, 0.22);
+}
+
+.room-terminal-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #6b5d4f;
+    letter-spacing: 0.5px;
+}
+
+.room-terminal-close {
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(180, 160, 140, 0.15);
+    color: #9a8b7a;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.room-terminal-close:hover {
+    background: rgba(180, 160, 140, 0.3);
+}
+
+/* 滚动必须放在内层：外层自己 overflow 会把它自己的 ::after 小尖角裁掉 */
+.room-terminal-body {
+    max-height: 250px;
+    overflow-y: auto;
+    padding: 12px 16px 14px;
+}
+
+.room-terminal-note {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: #9a8b7a;
+}
